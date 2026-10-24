@@ -19,6 +19,7 @@
 #include "capture_output_policy.h"
 #include "source_cadence.h"
 #include "presentation_state.h"
+#include "present_cap_policy.h"
 #include "discord/discord_rpc.h"
 
 #include <memory>
@@ -62,6 +63,7 @@ private:
     // and from ReconcileCaptureFormat after a force-reopen re-probe
     // updates m_sourceIsHDR10.
     void UpdateWindowTitle();
+    std::wstring GetEffectiveHdmiSourceLabel() const;
 
     // Push current config + live stats to the WebView2 settings UI so its
     // toggles/sliders/labels reflect reality. Called on open, on hotkey-
@@ -75,7 +77,7 @@ private:
     // the renderer. UpdateDiscordForCurrentGame pushes the current game's
     // title/art-key to Rich Presence (or clears it when gameId is empty).
     void ApplyGameSettings(const std::string& gameId);
-    void UpdateDiscordForCurrentGame();
+    void UpdateDiscordForCurrentGame(bool preserveStartTime = false);
 
     // Capture-side HDR/SDR reconciliation. Compares the format the capture
     // device is currently running (P010 vs BGRA/NV12) against what the
@@ -261,6 +263,7 @@ private:
     bool m_settingsVisible = false;
     std::unique_ptr<Config>           m_config;
     std::unique_ptr<DiscordRPC>       m_discord;
+    std::chrono::system_clock::time_point m_discordActivityStart{};
 
     // Background-thread monitor for HDMI source HDR<->SDR transitions.
     // Created in Initialize iff the Elgato HDR property GUID is readable
@@ -277,6 +280,14 @@ private:
     // active" only fires once per blocked attempt. Cleared on any
     // successful (non-PiP-blocked) ToggleFullscreen call.
     bool m_pipFullscreenBlockedLogged = false;
+
+    // Pending swap chain resize after ResizeBuffers kept the previous buffers
+    // (DX11Renderer::Resize returned false). Retries back off from 250 ms to
+    // 2 s; a different client size retries at once.
+    std::chrono::steady_clock::time_point m_resizeRetryAt{};
+    uint32_t m_resizeRetryCount = 0;
+    uint32_t m_resizeRetryWidth = 0;
+    uint32_t m_resizeRetryHeight = 0;
 
     // Transient toast notification. ShowToast() sets these; the run loop
     // draws Overlay::DrawToast while now < m_toastExpiry. Single-slot: a
@@ -441,7 +452,10 @@ private:
     uint32_t m_loopIterations  = 0;
     int      m_lastPresentationMode = -2;  // last DXGI composition mode logged
     bool m_lowLatency = true;   // present-on-arrival (wait-then-read) vs VRR pacing; default ON, toggle Alt+L / F1
-    double m_appliedPresentCapHz = -1.0;  // last cap pushed to the renderer, logged on change only
+    double m_presentCapMonitorHz = 0.0;
+    HMONITOR m_presentCapMonitor = nullptr;
+    PresentCapDecision m_presentCapDecision{};
+    std::wstring m_lastPresentCapLog; // policy changes can matter even at the same numeric cap
 
     // App ingest: live card-driver-to-app-callback delivery time, computed
     // each frame as arrivalWallNs - (frame.deviceTimestamp * 100) in ns
@@ -452,8 +466,10 @@ private:
     double   m_mfDeliveryLatencyMs  = 0.0;
     uint32_t m_mfDeliveryLogCounter = 0;   // periodic DebugView throttle
 
-    uint32_t m_currentFps        = 0;   // HDMI signal rate (~60 healthy)
-    uint32_t m_currentContentFps = 0;   // game unique-frame rate (from differ)
+    uint32_t m_currentFps        = 0;   // frames written to the capture buffer per second
+    uint32_t m_currentContentFps = 0;   // changed frames estimated by the GPU differ per second
+    bool     m_currentContentAvailable = false;
+    uint64_t m_contentClassificationsSinceSample = 0;
     uint64_t m_uniqueFrameCount  = 0;
     uint64_t m_skippedFrameCount = 0;   // frames skipped by VRR present pacing (total)
     // Keep skip counts for pacing diagnostics. Capture stalls make iteration
@@ -463,7 +479,7 @@ private:
     // Source frame rate pacing: keeps presents at the measured source rate
     // while the picture is still (see source_cadence.h).
     SourceCadence m_sourceCadence;
-    uint64_t m_presentCount        = 0;   // presents issued by the run loop (total)
+    uint64_t m_presentCount        = 0;   // run-loop Present calls that returned S_OK (total)
     uint32_t m_currentPresentFps   = 0;   // presents per second, sampled with the fps counters
     uint64_t m_cadenceHoldPresents = 0;   // presents issued by the still-picture cadence hold (total)
 

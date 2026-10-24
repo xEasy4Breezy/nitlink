@@ -27,6 +27,26 @@ static std::string Read(const std::filesystem::path& path) {
 static void ConfigTests(const std::filesystem::path& dir) {
     const auto path = dir / "config.ini";
     Config config;
+    Write(path, "language = zh-CN\n");
+    Check(config.Load(path.string()) && config.language == "zh-CN", "load Simplified Chinese preference");
+    Check(config.Save(path.string()), "save Simplified Chinese preference");
+    Config languageReload;
+    Check(languageReload.Load(path.string()) && languageReload.language == "zh-CN",
+          "Simplified Chinese preference survives restart");
+    config = Config{};
+    Write(path, "language = de-DE\n");
+    Check(config.Load(path.string()) && config.language == "de-DE", "load German preference");
+    Check(config.Save(path.string()), "save German preference");
+    Config germanReload;
+    Check(germanReload.Load(path.string()) && germanReload.language == "de-DE",
+          "German preference survives restart");
+    Write(path, "language = ko-KR\n");
+    Check(config.Load(path.string()) && config.language == "ko-KR", "load Korean preference");
+    Check(config.Save(path.string()), "save Korean preference");
+    Config koreanReload;
+    Check(koreanReload.Load(path.string()) && koreanReload.language == "ko-KR",
+          "Korean preference survives restart");
+    config = Config{};
     Write(path, "audio_volume = nan\npip_opacity = inf\nnis_sharpness = -inf\nwindow_width = 444junk\npip_x = 23junk\n");
     Check(config.Load(path.string()), "load malformed values");
     Check(config.audioVolume == 1 && config.pipOpacity == 0.9f && config.nisSharpness == Config{}.nisSharpness &&

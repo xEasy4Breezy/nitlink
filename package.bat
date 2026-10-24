@@ -19,7 +19,7 @@ if errorlevel 1 (
 )
 
 REM --- Configuration ---------------------------------------------------------
-set VERSION=1.2.3
+set VERSION=1.2.5
 set BUILD_DIR=out\build\x64-Release
 set BUILD_DIR_ALT=build\Release
 set STAGING_DIR=NitLink-%VERSION%-win64
@@ -100,6 +100,24 @@ if errorlevel 1 (
 copy /y "%BUILD_DIR%\locales\zh-TW.js" "%STAGING_DIR%\locales\" >nul
 if errorlevel 1 (
   echo [ERROR] zh-TW localization resource is missing from the build output.
+  pause
+  exit /b 1
+)
+copy /y "%BUILD_DIR%\locales\zh-CN.js" "%STAGING_DIR%\locales\" >nul
+if errorlevel 1 (
+  echo [ERROR] zh-CN localization resource is missing from the build output.
+  pause
+  exit /b 1
+)
+copy /y "%BUILD_DIR%\locales\de-DE.js" "%STAGING_DIR%\locales\" >nul
+if errorlevel 1 (
+  echo [ERROR] de-DE localization resource is missing from the build output.
+  pause
+  exit /b 1
+)
+copy /y "%BUILD_DIR%\locales\ko-KR.js" "%STAGING_DIR%\locales\" >nul
+if errorlevel 1 (
+  echo [ERROR] ko-KR localization resource is missing from the build output.
   pause
   exit /b 1
 )

@@ -1,4 +1,7 @@
 #include "capture/capture_device.h"
+#include "capture/dshow_capture.h"
+#include "capture/elgato_4kx_source.h"
+#include "app/capture_output_policy.h"
 
 #include <wrl/implements.h>
 #include <iostream>
@@ -23,9 +26,27 @@ struct CaptureDeviceFormatTests {
         return device.m_format;
     }
 
+    static CaptureFormat ReadDShowRate(int64_t interval)
+    {
+        DShowCapture device;
+        device.ReadFrameRateFromInterval(interval);
+        return device.GetOutputFormat();
+    }
+
     static HRESULT WriteRate(CaptureDevice& device, IMFMediaType* output)
     {
         return device.SetOutputFrameRate(output);
+    }
+
+    static void ReadbackRateAndPublish(CaptureDevice& device, IMFMediaType* actual)
+    {
+        device.UpdateFrameRateFromActual(actual);
+        device.PublishFormat();
+    }
+
+    static void ClearPublishedFormat(CaptureDevice& device)
+    {
+        device.ClearPublishedFormat();
     }
 
     static void SeedP010Notice(CaptureDevice& device,
@@ -175,6 +196,78 @@ bool RunChecks()
     const Mode nv12 = {MFVideoFormat_NV12, 3840, 2160, 60, 1};
     const Mode p010 = {MFVideoFormat_P010, 1920, 1080, 60, 1};
 
+    for (const int64_t interval : {83333LL, 166666LL, 333667LL}) {
+        const auto format = Access::ReadDShowRate(interval);
+        pass &= Expect(format.fpsNumerator == 10000000 &&
+                       format.fpsDenominator == static_cast<uint32_t>(interval) &&
+                       format.fps == 10000000 / interval,
+                       "DirectShow publishes the negotiated interval, not default 60/1");
+    }
+    for (const int64_t interval : {0LL, -1LL, INT64_MAX}) {
+        const auto format = Access::ReadDShowRate(interval);
+        pass &= Expect(format.fpsNumerator == 0 && format.fpsDenominator == 1 &&
+                       format.fps == 0,
+                       "invalid or unrepresentable DirectShow rate is unknown");
+    }
+
+    {
+        CaptureDevice device;
+        const auto published = device.GetOutputFormat();
+        pass &= Expect(published.width == 0 && published.height == 0 &&
+                       published.fps == 0 && published.fpsNumerator == 0 &&
+                       published.fpsDenominator == 1 &&
+                       device.GetPresentPacingRateHint() == 0,
+                       "unopened device publishes unknown dimensions and rate");
+        const auto working = Access::Format(device);
+        pass &= Expect(working.width == 3840 && working.height == 2160 &&
+                       working.fps == 60,
+                       "unpublished metadata does not change negotiation defaults");
+    }
+
+    // The output readback must replace a requested 120, including when MF
+    // substitutes another rate or does not report MF_MT_FRAME_RATE at all.
+    for (const Mode actual : {
+             Mode{MFVideoFormat_NV12, 1920, 1080, 120, 1},
+             Mode{MFVideoFormat_NV12, 1920, 1080, 60, 1},
+             Mode{MFVideoFormat_NV12, 1920, 1080, 120000, 1001},
+             Mode{MFVideoFormat_NV12, 1920, 1080, 10000000, 83333},
+             Mode{MFVideoFormat_NV12, 1920, 1080, 0, 1},
+             Mode{MFVideoFormat_NV12, 1920, 1080, 120, 0},
+             Mode{MFVideoFormat_NV12, 1920, 1080, 120, 1, false}}) {
+        CaptureDevice device;
+        auto source = MakeSource({{{{MFVideoFormat_NV12, 1920, 1080, 120, 1}}}});
+        CaptureDevice::OverrideSpec manual;
+        manual.width = 1920;
+        manual.height = 1080;
+        manual.fps = manual.fpsNumerator = 120;
+        pass &= Expect(Access::Negotiate(device, source.Get(), gc553, false, manual),
+                       "manual 1080p120 Auto request selects native SDR mode");
+        pass &= ExpectRate(device, 120, 1, "outgoing request asks for 120/1");
+        ComPtr<IMFMediaType> actualType;
+        Check(MFCreateMediaType(&actualType));
+        if (actual.hasRate) {
+            Check(MFSetAttributeRatio(actualType.Get(), MF_MT_FRAME_RATE,
+                                      actual.numerator, actual.denominator));
+        }
+        Access::ReadbackRateAndPublish(device, actualType.Get());
+        const auto published = device.GetOutputFormat();
+        const bool known = actual.hasRate && actual.numerator > 0 && actual.denominator > 0;
+        pass &= Expect(published.fpsNumerator == (known ? actual.numerator : 0) &&
+                       published.fpsDenominator == (known ? actual.denominator : 1) &&
+                       published.fps == (known ? actual.numerator / actual.denominator : 0),
+                       "published FPS uses actual MF readback, never a missing-rate request fallback");
+        pass &= Expect(device.GetPresentPacingRateHint() ==
+                           (known ? actual.numerator / actual.denominator : 120),
+                       "unknown MF statistics preserve the pre-existing present-cap hint");
+        Access::ClearPublishedFormat(device);
+        const auto cleared = device.GetOutputFormat();
+        pass &= Expect(cleared.width == 0 && cleared.height == 0 &&
+                       cleared.fps == 0 && cleared.fpsNumerator == 0 &&
+                       cleared.fpsDenominator == 1 &&
+                       device.GetPresentPacingRateHint() == 0,
+                       "cleared session cannot publish defaults or stale rate hints");
+    }
+
     for (const UINT32 numerator : {60000u, 30000u, 24000u, 120000u}) {
         CaptureDevice device;
         auto source = MakeSource({{{{MFVideoFormat_P010, 1920, 1080, numerator, 1001}}}});
@@ -316,7 +409,44 @@ bool RunChecks()
                        "session B may publish its own P010 after readback");
     }
 
-    for (const auto name : {L"Elgato Game Capture 4K Pro", L"Generic capture card"}) {
+    {
+        Source4KProMode mode;
+        mode.detected = true;
+        mode.width = 2560;
+        mode.height = 1440;
+        mode.fps = 60;
+        mode.hdrValid = true;
+        const Mode xP010 = {MFVideoFormat_P010, 2560, 1440, 60, 1};
+        const Mode xNV12 = {MFVideoFormat_NV12, 2560, 1440, 60, 1};
+        for (bool hdr : {true, false}) {
+            mode.hdrActive = hdr;
+            bool sourceHDR = false, available = false;
+            Apply4KXSourceHdr(mode, sourceHDR, available);
+            for (bool output : {false, true}) {
+                const auto policy = Decide4KXSourceCapturePolicy(
+                    NegotiatedCaptureFormatKind::Other, false, output,
+                    CaptureFormatPreference::Auto, sourceHDR, available, false);
+                CaptureDevice device;
+                auto source = MakeSource({{{xNV12, xP010}}});
+                CaptureDevice::OverrideSpec ov;
+                ov.width = 2560; ov.height = 1440; ov.fps = 60;
+                pass &= Expect(Access::Negotiate(device, source.Get(), L"Elgato 4K X",
+                                                policy.desiredCaptureIsP010, ov),
+                               "4K X source policy selects the advertised 1440p60 native mode");
+                pass &= Expect(policy.desiredCaptureIsP010 == hdr,
+                               "4K X requests P010 only for valid HDR regardless of output preference");
+                pass &= Expect(Access::Format(device).width == 2560 &&
+                               Access::Format(device).height == 1440,
+                               "4K X keeps 1440p dimensions");
+                pass &= ExpectRate(device, 60, 1, "4K X keeps 60 Hz at 1440p");
+            }
+        }
+        CaptureDevice fallbackDevice;
+        auto onlySDR = MakeSource({{{xNV12}}});
+        pass &= Expect(Access::Negotiate(fallbackDevice, onlySDR.Get(), L"Elgato 4K X", true),
+                       "4K X enumeration without P010 retains the generic Open fallback path");
+    }
+    for (const auto name : {L"Elgato Game Capture 4K Pro", L"Elgato 4K S", L"Generic capture card"}) {
         CaptureDevice device;
         auto source = MakeSource({{{{MFVideoFormat_P010, 2560, 1440, 30, 1}, p010}}});
         pass &= Expect(Access::Negotiate(device, source.Get(), name, true),

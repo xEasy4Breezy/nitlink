@@ -1,5 +1,7 @@
 #pragma once
 
+#include "hdmi_source.h"
+
 #include <map>
 #include <string>
 #include <cstdint>
@@ -53,7 +55,7 @@ enum PresentPacing {
 };
 
 struct Config {
-    // UI language preference: system, en-US, or zh-TW. The effective locale
+    // UI language preference: system, en-US, zh-TW, zh-CN, de-DE, or ko-KR. The effective locale
     // is resolved by Localization; unsupported system locales use en-US.
     std::string  language = "system";
 
@@ -78,9 +80,35 @@ struct Config {
     std::wstring audioOutputDevice = L""; // Empty = system default
     float        audioVolume       = 1.0f;
     bool         audioMuted        = false;
+    int          audioFifoMs       = 40;
+    int          audioRenderMs     = 30;
+    bool         audioDrift        = true;
+    bool         audioExclusive    = false;
 
     // Capture
     std::wstring preferredDevice = L""; // Empty = first available
+
+    // Global identity of the device connected to HDMI IN, independent of
+    // the capture card, per-device format overrides, and HDR signal state.
+    std::string manualHdmiSource = "auto";
+    std::string manualHdmiSourceCustom;
+    bool SetManualHdmiSource(std::string_view value) {
+        if (!IsValidManualHdmiSource(value)) return false;
+        manualHdmiSource = value;
+        return true;
+    }
+    bool SetManualHdmiSourceCustom(std::string_view value) {
+        const auto normalized = NormalizeManualHdmiSourceCustom(value);
+        if (!normalized) return false;
+        manualHdmiSourceCustom = *normalized;
+        return true;
+    }
+    bool SetManualHdmiSourceCustom(std::wstring_view value) {
+        const auto normalized = NormalizeManualHdmiSourceCustom(value);
+        if (!normalized) return false;
+        manualHdmiSourceCustom = *normalized;
+        return true;
+    }
 
     // Manual capture format overrides, keyed by capture device name.
     // Each card remembers its own pick (4K Pro at 4K, 4K S at 1080p+240,
@@ -159,12 +187,11 @@ struct Config {
     // displays. Kept independent of capture pacing and low-latency reads.
     bool         vsync = false;
 
-    // Present-rate cap for the low-latency tearing-allowed present, in Hz.
-    // 0 = automatic: the window's monitor refresh rate minus 3, applied only
-    // when that stays at or above the source frame rate, so a variable
-    // refresh display engages VRR and a fixed refresh display never drops
-    // frames. 30 to 1000 = fixed cap. -1 = no cap. A VRR_CAP.txt file next
-    // to the exe overrides these rates. VSync bypasses the tearing-mode cap.
+    // Present-rate cap for display-refresh pacing with VSync off, in Hz.
+    // 0 = automatic: monitor refresh minus 3 when it accommodates the source;
+    // otherwise monitor refresh. 30 to 1000 = fixed cap. -1 = explicitly
+    // uncapped. VRR_CAP.txt overrides these rates. VSync and source/capture
+    // pacing bypass the cap. Low latency only changes the wait's location.
     int          presentCapHz = 0;
 
     // Display aspect ratio. "auto" shows the source at the ratio the card

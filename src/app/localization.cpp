@@ -20,6 +20,10 @@ const Table& EnglishTable()
         {L"dialog.allFilesFilter", L"All files (*.*)"},
         {L"overlay.noSignal", L"NO SIGNAL"},
         {L"overlay.frameRate", L"Frame rate"},
+        {L"overlay.presentRate", L"Present rate"},
+        {L"overlay.presentFps", L"Present FPS"},
+        {L"overlay.captureFps", L"Capture FPS"},
+        {L"overlay.contentFps", L"Content FPS (est.)"},
         {L"overlay.appIngest", L"App ingest"},
         {L"overlay.fps", L"FPS"},
         {L"overlay.ms", L"MS"},
@@ -108,6 +112,10 @@ const Table& TraditionalChineseTable()
         {L"dialog.allFilesFilter", L"所有檔案（*.*）"},
         {L"overlay.noSignal", L"無訊號"},
         {L"overlay.frameRate", L"幀率"},
+        {L"overlay.presentRate", L"呈現幀率"},
+        {L"overlay.presentFps", L"呈現 FPS"},
+        {L"overlay.captureFps", L"擷取 FPS"},
+        {L"overlay.contentFps", L"內容變化 FPS（估計）"},
         {L"overlay.appIngest", L"應用程式接收"},
         {L"overlay.fps", L"FPS"},
         {L"overlay.ms", L"毫秒"},
@@ -185,6 +193,282 @@ const Table& TraditionalChineseTable()
     return table;
 }
 
+const Table& SimplifiedChineseTable()
+{
+    static const Table table = {
+        {L"error.com", L"COM 运行时初始化失败。"},
+        {L"error.mediaFoundation", L"Media Foundation 初始化失败。"},
+        {L"error.application", L"NitLink 初始化失败。\n请确认已连接采集卡。"},
+        {L"dialog.chooseNoSignalImage", L"选择无信号图片"},
+        {L"dialog.imagesFilter", L"图片（*.png；*.jpg；*.jpeg；*.bmp）"},
+        {L"dialog.allFilesFilter", L"所有文件（*.*）"},
+        {L"overlay.noSignal", L"无信号"},
+        {L"overlay.frameRate", L"帧率"},
+        {L"overlay.presentRate", L"呈现频率"},
+        {L"overlay.presentFps", L"呈现 FPS"},
+        {L"overlay.captureFps", L"采集 FPS"},
+        {L"overlay.contentFps", L"内容变化 FPS（估算）"},
+        {L"overlay.appIngest", L"程序接收"},
+        {L"overlay.fps", L"FPS"},
+        {L"overlay.ms", L"毫秒"},
+        {L"overlay.gpu", L"GPU"},
+        {L"overlay.waitingForSource", L"正在等待来源信号…"},
+        {L"overlay.initializingCapture", L"正在初始化采集设备…"},
+        {L"overlay.switchingHdr", L"正在切换 HDR…"},
+        {L"overlay.inputSignalLost", L"输入信号丢失"},
+        {L"overlay.waitingForHdmi", L"正在等待 HDMI 信号来源…"},
+        {L"overlay.checkHdmi", L"请确认信号来源已打开，且 HDMI 线材两端都已连接。"},
+        {L"overlay.badgeColor", L"色彩"},
+        {L"value.sourceFrameRate", L"来源帧率"},
+        {L"value.captureRate", L"采集帧率"},
+        {L"value.displayRefresh", L"显示器刷新率"},
+        {L"value.auto", L"自动"},
+        {L"value.stretch", L"拉伸"},
+        {L"value.right", L"右侧"},
+        {L"value.left", L"左侧"},
+        {L"toast.noAudio", L"没有音频：Windows 麦克风访问权已关闭。请前往「设置 > 隐私和安全性 > 麦克风」。"},
+        {L"toast.windowsHdrDisabled", L"Windows HDR 尚未启用。请按 Win+Alt+B 后再试一次。"},
+        {L"toast.vsyncOn", L"垂直同步：开启（Alt+V）"},
+        {L"toast.vsyncOff", L"垂直同步：关闭（Alt+V）"},
+        {L"toast.gc553proCaptureSwitch", L"HDR 来源已检测，正在切换采集模式…"},
+        {L"toast.presentPacing", L"画面呈现节奏"},
+        {L"toast.aspectRatio", L"宽高比"},
+        {L"toast.colorRangeAuto", L"色彩范围：由 Media Foundation 自动判定（Alt+R）"},
+        {L"toast.colorRangeFull", L"色彩范围：强制完整范围（Alt+R）"},
+        {L"toast.colorRangeLimited", L"色彩范围：强制有限范围（Alt+R）"},
+        {L"toast.screenshotSaved", L"截图已保存："},
+        {L"toast.captureFormatUnavailable", L"无法使用指定的采集格式，已恢复为自动。"},
+        {L"toast.noSignalImageLoaded", L"自定义无信号图片已加载"},
+        {L"toast.noSignalImageLoadFailed", L"无法加载自定义无信号图片"},
+        {L"toast.configRecoveryRequired", L"写入及还原均失败，目前的配置文件未被使用，并已停用保存。请从 {backup} 还原设置，再重命名或删除该复原文件，然后重新启动。"},
+        {L"toast.configRecoveryCopy", L"存在设置复原备份：{backup}。请先检查内容，再重命名或删除该文件。"},
+        {L"toast.configFolderNotWritable", L"无法在 {path} 创建设置。请检查文件夹权限及快捷方式的“起始位置”。"},
+        {L"toast.configLoadFailed", L"无法加载设置，变更将不会保存。原始 nitlink.json 已保留。请修正或重命名该文件后重新启动。"},
+        {L"toast.configLoadFailedBackup", L"无法加载设置，变更将不会保存。备份：{backup}。请修正或重命名 nitlink.json 后重新启动。"},
+        {L"toast.configSaveFailed", L"无法保存设置。请检查文件夹权限，以及 nitlink.json 是否为只读或被锁定。"},
+        {L"toast.settingsProfile", L"无法使用设置：无法打开 WebView2 配置文件文件夹。"},
+        {L"toast.settingsRuntime", L"无法使用设置。请安装或更新 Microsoft Edge WebView2 运行时。"},
+        {L"toast.settingsStartFailed", L"无法启动设置。请更新 WebView2 并重新启动 NitLink。"},
+        {L"toast.settingsFiles", L"设置文件丢失、空白或无法读取。请重新安装完整的 NitLink 文件夹。"},
+        {L"toast.settingsSecurity", L"无法使用设置。请更新 WebView2 以启用必要的安全功能。"},
+        {L"toast.settingsMemory", L"内存不足，无法加载设置。请重新启动 NitLink。"},
+        {L"toast.settingsResources", L"无法安全地加载设置资源。请重新安装 NitLink。"},
+        {L"toast.settingsNavigation", L"无法加载设置页面。请重新安装完整的 NitLink 文件夹。"},
+        {L"toast.settingsProcessFailed", L"设置浏览器已停止。请重新启动 NitLink 以恢复设置。"},
+        {L"toast.settingsTimeout", L"设置未能完成加载。请更新 WebView2 或重新安装 NitLink，然后重新启动。"},
+        {L"toast.settingsRetry", L"正在重新启动设置，采集画面可继续播放。"},
+        {L"toast.settingsStarting", L"设置将于加载完成后打开。"},
+        {L"toast.imageInvalidPath", L"请选择具有完整本机路径的图片。"},
+        {L"toast.imageNetworkLocation", L"不支持网络图片，请先将图片复制到本机磁盘。"},
+        {L"toast.imageFileUnavailable", L"找不到图片或无法读取，请重新选择。"},
+        {L"toast.imageTooLarge", L"图片过大：上限为 512 MiB，每边不超过 16384 像素。"},
+        {L"toast.imageUnsupportedFormat", L"不支持此图片内容，请使用 PNG、JPEG 或 BMP 文件。"},
+        {L"toast.imageOutOfMemory", L"内存不足，无法加载图片。请选择较小的图片。"},
+        {L"toast.p010SelectionFallback", L"所选采集分辨率／帧率没有相符的 P010 模式；改用原生 P010 {width}×{height} @ {fps} FPS。"},
+        {L"toast.p010Unavailable", L"未协商到兼容的 P010 模式；目前使用 {format} 采集，HDR 输出已停用。"},
+        {L"toast.manualFormatHdrRequiresP010", L"目前采集格式手动设置为 {format}；HDR 需要 P010。请改用「自动」或 P010 以启用 HDR。"},
+        {L"diagnostic.levelsNoRange", L"信号层级：此路径没有 YUV 范围（请使用 HDR / P010 采集测试）"},
+        {L"diagnostic.levelsY", L"Y"},
+        {L"diagnostic.levelsSignal", L"信号"},
+        {L"diagnostic.levelsDecode", L"解码"},
+        {L"diagnostic.levelsCb", L"Cb"},
+        {L"diagnostic.levelsCr", L"Cr"},
+        {L"diagnostic.bits8", L"8 比特"},
+        {L"value.full", L"完整"},
+        {L"value.limited", L"有限"},
+        {L"value.needBlack", L"？需要黑阶"},
+        {L"unit.ms", L"毫秒"},
+        {L"unit.fps", L"FPS"},
+        {L"title.hdr", L"HDR"},
+        {L"title.sdr", L"SDR"},
+    };
+    return table;
+}
+
+const Table& GermanTable()
+{
+    static const Table table = {
+        {L"error.com", L"Die COM-Laufzeit konnte nicht initialisiert werden."},
+        {L"error.mediaFoundation", L"Media Foundation konnte nicht initialisiert werden."},
+        {L"error.application", L"NitLink konnte nicht initialisiert werden.\nPrüfen Sie, ob eine Aufnahmekarte angeschlossen ist."},
+        {L"dialog.chooseNoSignalImage", L"Bild für „Kein Signal“ auswählen"},
+        {L"dialog.imagesFilter", L"Bilder (*.png;*.jpg;*.jpeg;*.bmp)"},
+        {L"dialog.allFilesFilter", L"Alle Dateien (*.*)"},
+        {L"overlay.noSignal", L"KEIN SIGNAL"},
+        {L"overlay.frameRate", L"Bildrate"},
+        {L"overlay.presentRate", L"Ausgaberate"},
+        {L"overlay.presentFps", L"Ausgabe-FPS"},
+        {L"overlay.captureFps", L"Aufnahme-FPS"},
+        {L"overlay.contentFps", L"Inhalts-FPS (geschätzt)"},
+        {L"overlay.appIngest", L"App-Eingang"},
+        {L"overlay.fps", L"FPS"},
+        {L"overlay.ms", L"MS"},
+        {L"overlay.gpu", L"GPU"},
+        {L"overlay.waitingForSource", L"Warte auf Quellsignal…"},
+        {L"overlay.initializingCapture", L"Aufnahmegerät wird initialisiert…"},
+        {L"overlay.switchingHdr", L"HDR wird umgeschaltet…"},
+        {L"overlay.inputSignalLost", L"Eingangssignal verloren"},
+        {L"overlay.waitingForHdmi", L"Warte auf HDMI-Quelle…"},
+        {L"overlay.checkHdmi", L"Stellen Sie sicher, dass die Quelle eingeschaltet ist und das HDMI-Kabel an beiden Enden fest steckt."},
+        {L"overlay.badgeColor", L"FARBE"},
+        {L"value.sourceFrameRate", L"Quell-Bildrate"},
+        {L"value.captureRate", L"Aufnahmerate"},
+        {L"value.displayRefresh", L"Bildwiederholrate"},
+        {L"value.auto", L"Auto"},
+        {L"value.stretch", L"Strecken"},
+        {L"value.right", L"Rechts"},
+        {L"value.left", L"Links"},
+        {L"toast.noAudio", L"Kein Audio: Der Mikrofonzugriff von Windows ist deaktiviert. Einstellungen > Datenschutz und Sicherheit > Mikrofon."},
+        {L"toast.windowsHdrDisabled", L"Windows-HDR ist nicht aktiviert. Drücken Sie Win+Alt+B und versuchen Sie es erneut."},
+        {L"toast.vsyncOn", L"VSync: EIN (Alt+V)"},
+        {L"toast.vsyncOff", L"VSync: AUS (Alt+V)"},
+        {L"toast.gc553proCaptureSwitch", L"HDR-Quelle erkannt. Aufnahmemodus wird umgeschaltet…"},
+        {L"toast.presentPacing", L"Ausgabetakt"},
+        {L"toast.aspectRatio", L"Seitenverhältnis"},
+        {L"toast.colorRangeAuto", L"Farbbereich: AUTO über Media Foundation (Alt+R)"},
+        {L"toast.colorRangeFull", L"Farbbereich: VOLL erzwungen (Alt+R)"},
+        {L"toast.colorRangeLimited", L"Farbbereich: BEGRENZT erzwungen (Alt+R)"},
+        {L"toast.screenshotSaved", L"Screenshot gespeichert: "},
+        {L"toast.captureFormatUnavailable", L"Aufnahmeformat nicht verfügbar, auf automatisch zurückgesetzt."},
+        {L"toast.noSignalImageLoaded", L"Eigenes „Kein Signal“-Bild geladen"},
+        {L"toast.noSignalImageLoadFailed", L"Eigenes „Kein Signal“-Bild konnte nicht geladen werden"},
+        {L"toast.configRecoveryRequired", L"Die aktuelle Einstellungsdatei wird nicht verwendet, und Speichern ist nach einem Schreib- und Wiederherstellungsfehler deaktiviert. Stellen Sie die Einstellungen aus {backup} wieder her, benennen Sie diese Wiederherstellungsdatei um oder löschen Sie sie, und starten Sie dann neu."},
+        {L"toast.configRecoveryCopy", L"Es gibt eine Wiederherstellungskopie der Einstellungen: {backup}. Prüfen Sie sie, bevor Sie sie umbenennen oder löschen."},
+        {L"toast.configFolderNotWritable", L"Die Einstellungen konnten nicht unter {path} erstellt werden. Prüfen Sie die Ordnerberechtigungen und das Feld „Ausführen in“ der Verknüpfung."},
+        {L"toast.configLoadFailed", L"Die Einstellungen konnten nicht geladen werden; Änderungen werden nicht gespeichert. Die ursprüngliche nitlink.json bleibt erhalten. Korrigieren Sie sie oder benennen Sie sie um, und starten Sie dann neu."},
+        {L"toast.configLoadFailedBackup", L"Die Einstellungen konnten nicht geladen werden; Änderungen werden nicht gespeichert. Sicherung: {backup}. Korrigieren Sie nitlink.json oder benennen Sie sie um, und starten Sie dann neu."},
+        {L"toast.configSaveFailed", L"Die Einstellungen konnten nicht gespeichert werden. Prüfen Sie die Ordnerberechtigungen und ob nitlink.json schreibgeschützt oder gesperrt ist."},
+        {L"toast.settingsProfile", L"Einstellungen nicht verfügbar: Der WebView2-Profilordner konnte nicht geöffnet werden."},
+        {L"toast.settingsRuntime", L"Einstellungen nicht verfügbar. Installieren oder aktualisieren Sie die Microsoft Edge WebView2 Runtime."},
+        {L"toast.settingsStartFailed", L"Die Einstellungen konnten nicht gestartet werden. Aktualisieren Sie WebView2 und starten Sie NitLink neu."},
+        {L"toast.settingsFiles", L"Einstellungsdateien fehlen, sind leer oder nicht lesbar. Installieren Sie den vollständigen NitLink-Ordner neu."},
+        {L"toast.settingsSecurity", L"Einstellungen nicht verfügbar. Aktualisieren Sie WebView2, um die erforderlichen Sicherheitsfunktionen zu aktivieren."},
+        {L"toast.settingsMemory", L"Nicht genügend Arbeitsspeicher zum Laden der Einstellungen. Starten Sie NitLink neu."},
+        {L"toast.settingsResources", L"Die Einstellungsressourcen konnten nicht sicher geladen werden. Installieren Sie NitLink neu."},
+        {L"toast.settingsNavigation", L"Die Einstellungsseite konnte nicht geladen werden. Installieren Sie den vollständigen NitLink-Ordner neu."},
+        {L"toast.settingsProcessFailed", L"Der Einstellungsbrowser wurde beendet. Starten Sie NitLink neu, um die Einstellungen wiederherzustellen."},
+        {L"toast.settingsTimeout", L"Die Einstellungen wurden nicht fertig geladen. Aktualisieren Sie WebView2 oder installieren Sie NitLink neu, und starten Sie dann neu."},
+        {L"toast.settingsRetry", L"Die Einstellungen werden neu gestartet. Das Aufnahmebild läuft weiter."},
+        {L"toast.settingsStarting", L"Die Einstellungen öffnen sich, sobald sie geladen sind."},
+        {L"toast.imageInvalidPath", L"Wählen Sie ein Bild über einen vollständigen lokalen Dateipfad aus."},
+        {L"toast.imageNetworkLocation", L"Bilder im Netzwerk werden nicht unterstützt. Kopieren Sie das Bild auf ein lokales Laufwerk."},
+        {L"toast.imageFileUnavailable", L"Die Bilddatei fehlt oder ist nicht lesbar. Wählen Sie sie erneut aus."},
+        {L"toast.imageTooLarge", L"Das Bild ist zu groß: maximal 512 MiB und 16384 Pixel pro Seite."},
+        {L"toast.imageUnsupportedFormat", L"Nicht unterstützter Bildinhalt. Verwenden Sie eine PNG-, JPEG- oder BMP-Datei."},
+        {L"toast.imageOutOfMemory", L"Nicht genügend Arbeitsspeicher zum Laden des Bildes. Wählen Sie ein kleineres Bild."},
+        {L"toast.p010SelectionFallback", L"Kein P010-Modus passt zur gewählten Aufnahmeauflösung/Bildrate; natives P010 {width}x{height} @ {fps} FPS wird verwendet."},
+        {L"toast.p010Unavailable", L"Es wurde kein kompatibler P010-Modus ausgehandelt; {format}-Aufnahme wird verwendet, die HDR-Ausgabe ist deaktiviert."},
+        {L"toast.manualFormatHdrRequiresP010", L"HDR erfordert P010, das Aufnahmeformat ist aber manuell auf {format} gesetzt. Wählen Sie Auto oder P010, um HDR zu aktivieren."},
+        {L"diagnostic.levelsNoRange", L"PEGEL: kein YUV-Bereich auf diesem Pfad (mit HDR- / P010-Aufnahme testen)"},
+        {L"diagnostic.levelsY", L"Y"},
+        {L"diagnostic.levelsSignal", L"sig"},
+        {L"diagnostic.levelsDecode", L"dek"},
+        {L"diagnostic.levelsCb", L"Cb"},
+        {L"diagnostic.levelsCr", L"Cr"},
+        {L"diagnostic.bits8", L"8b"},
+        {L"value.full", L"VOLL"},
+        {L"value.limited", L"BEGRENZT"},
+        {L"value.needBlack", L"? Schwarz nötig"},
+        {L"unit.ms", L"ms"},
+        {L"unit.fps", L"FPS"},
+        {L"title.hdr", L"HDR"},
+        {L"title.sdr", L"SDR"},
+    };
+    return table;
+}
+
+const Table& KoreanTable()
+{
+    static const Table table = {
+        {L"error.com", L"COM 런타임을 초기화하지 못했습니다."},
+        {L"error.mediaFoundation", L"Media Foundation을 초기화하지 못했습니다."},
+        {L"error.application", L"NitLink를 초기화하지 못했습니다.\n캡처보드가 연결되어 있는지 확인하세요."},
+        {L"dialog.chooseNoSignalImage", L"신호 없음 이미지 선택"},
+        {L"dialog.imagesFilter", L"이미지 (*.png;*.jpg;*.jpeg;*.bmp)"},
+        {L"dialog.allFilesFilter", L"모든 파일 (*.*)"},
+        {L"overlay.noSignal", L"신호 없음"},
+        {L"overlay.frameRate", L"프레임 레이트"},
+        {L"overlay.presentRate", L"출력 빈도"},
+        {L"overlay.presentFps", L"출력 FPS"},
+        {L"overlay.captureFps", L"캡처 FPS"},
+        {L"overlay.contentFps", L"콘텐츠 FPS (추정)"},
+        {L"overlay.appIngest", L"앱 전달 지연"},
+        {L"overlay.fps", L"FPS"},
+        {L"overlay.ms", L"MS"},
+        {L"overlay.gpu", L"GPU"},
+        {L"overlay.waitingForSource", L"소스 신호 대기 중…"},
+        {L"overlay.initializingCapture", L"캡처 장치 초기화 중…"},
+        {L"overlay.switchingHdr", L"HDR 전환 중…"},
+        {L"overlay.inputSignalLost", L"입력 신호 끊김"},
+        {L"overlay.waitingForHdmi", L"HDMI 소스 대기 중…"},
+        {L"overlay.checkHdmi", L"소스 장치의 전원이 켜져 있고 HDMI 케이블 양쪽이 제대로 연결되어 있는지 확인하세요."},
+        {L"overlay.badgeColor", L"색상"},
+        {L"value.sourceFrameRate", L"소스 프레임 레이트"},
+        {L"value.captureRate", L"캡처 프레임 레이트"},
+        {L"value.displayRefresh", L"디스플레이 주사율"},
+        {L"value.auto", L"자동"},
+        {L"value.stretch", L"늘이기"},
+        {L"value.right", L"오른쪽"},
+        {L"value.left", L"왼쪽"},
+        {L"toast.noAudio", L"오디오 없음: Windows 마이크 액세스가 꺼져 있습니다. 설정 > 개인 정보 및 보안 > 마이크에서 확인하세요."},
+        {L"toast.windowsHdrDisabled", L"Windows HDR이 활성화되어 있지 않습니다. Win+Alt+B를 누른 후 다시 시도하세요."},
+        {L"toast.vsyncOn", L"수직 동기화: 켜짐 (Alt+V)"},
+        {L"toast.vsyncOff", L"수직 동기화: 꺼짐 (Alt+V)"},
+        {L"toast.gc553proCaptureSwitch", L"HDR 소스를 감지했습니다. 캡처 모드 전환 중…"},
+        {L"toast.presentPacing", L"화면 출력 주기"},
+        {L"toast.aspectRatio", L"화면 비율"},
+        {L"toast.colorRangeAuto", L"색상 범위: Media Foundation 자동 설정 (Alt+R)"},
+        {L"toast.colorRangeFull", L"색상 범위: 전체 범위 강제 적용 (Alt+R)"},
+        {L"toast.colorRangeLimited", L"색상 범위: 제한 범위 강제 적용 (Alt+R)"},
+        {L"toast.screenshotSaved", L"스크린샷 저장됨: "},
+        {L"toast.captureFormatUnavailable", L"캡처 형식을 사용할 수 없어 자동 설정으로 되돌렸습니다."},
+        {L"toast.noSignalImageLoaded", L"사용자 지정 신호 없음 이미지를 불러왔습니다"},
+        {L"toast.noSignalImageLoadFailed", L"사용자 지정 신호 없음 이미지를 불러오지 못했습니다"},
+        {L"toast.configRecoveryRequired", L"쓰기와 복원에 실패하여 현재 설정 파일을 사용하지 않으며 저장 기능이 비활성화되었습니다. {backup}에서 설정을 복원한 뒤, 해당 복구 파일의 이름을 바꾸거나 삭제하고 다시 시작하세요."},
+        {L"toast.configRecoveryCopy", L"설정 복구 사본이 있습니다: {backup}. 이름을 바꾸거나 삭제하기 전에 내용을 확인하세요."},
+        {L"toast.configFolderNotWritable", L"{path}에 설정을 생성하지 못했습니다. 폴더 권한과 바로 가기의 시작 위치를 확인하세요."},
+        {L"toast.configLoadFailed", L"설정을 불러오지 못했습니다. 변경 사항은 저장되지 않습니다. 원본 nitlink.json은 보존됩니다. 파일을 수정하거나 이름을 바꾼 뒤 다시 시작하세요."},
+        {L"toast.configLoadFailedBackup", L"설정을 불러오지 못했습니다. 변경 사항은 저장되지 않습니다. 백업: {backup}. nitlink.json을 수정하거나 이름을 바꾼 뒤 다시 시작하세요."},
+        {L"toast.configSaveFailed", L"설정을 저장하지 못했습니다. 폴더 권한과 nitlink.json이 읽기 전용이거나 잠겨 있는지 확인하세요."},
+        {L"toast.settingsProfile", L"설정을 사용할 수 없습니다. WebView2 프로필 폴더를 열지 못했습니다."},
+        {L"toast.settingsRuntime", L"설정을 사용할 수 없습니다. Microsoft Edge WebView2 런타임을 설치하거나 업데이트하세요."},
+        {L"toast.settingsStartFailed", L"설정을 시작하지 못했습니다. WebView2를 업데이트하고 NitLink를 다시 시작하세요."},
+        {L"toast.settingsFiles", L"설정 파일이 없거나, 비어 있거나, 읽을 수 없습니다. 전체 NitLink 폴더를 다시 설치하세요."},
+        {L"toast.settingsSecurity", L"설정을 사용할 수 없습니다. 필요한 보안 기능을 활성화하려면 WebView2를 업데이트하세요."},
+        {L"toast.settingsMemory", L"설정을 불러올 메모리가 부족합니다. NitLink를 다시 시작하세요."},
+        {L"toast.settingsResources", L"설정 리소스를 안전하게 불러오지 못했습니다. NitLink를 다시 설치하세요."},
+        {L"toast.settingsNavigation", L"설정 페이지를 불러오지 못했습니다. 전체 NitLink 폴더를 다시 설치하세요."},
+        {L"toast.settingsProcessFailed", L"설정 브라우저가 중지되었습니다. 설정을 복구하려면 NitLink를 다시 시작하세요."},
+        {L"toast.settingsTimeout", L"설정 로딩이 완료되지 않았습니다. WebView2를 업데이트하거나 NitLink를 다시 설치한 뒤 다시 시작하세요."},
+        {L"toast.settingsRetry", L"설정을 다시 시작하는 중입니다. 캡처 영상은 계속 재생할 수 있습니다."},
+        {L"toast.settingsStarting", L"로딩이 완료되면 설정이 열립니다."},
+        {L"toast.imageInvalidPath", L"전체 로컬 파일 경로로 이미지를 선택하세요."},
+        {L"toast.imageNetworkLocation", L"네트워크 이미지는 지원하지 않습니다. 이미지를 로컬 드라이브에 복사하세요."},
+        {L"toast.imageFileUnavailable", L"이미지 파일이 없거나 읽을 수 없습니다. 다시 선택하세요."},
+        {L"toast.imageTooLarge", L"이미지가 너무 큽니다. 최대 512 MiB이며 가로와 세로는 각각 16384픽셀 이하여야 합니다."},
+        {L"toast.imageUnsupportedFormat", L"지원하지 않는 이미지 형식입니다. PNG, JPEG 또는 BMP 파일을 사용하세요."},
+        {L"toast.imageOutOfMemory", L"이미지를 불러올 메모리가 부족합니다. 더 작은 이미지를 선택하세요."},
+        {L"toast.p010SelectionFallback", L"선택한 캡처 해상도/프레임 레이트에 맞는 P010 모드가 없습니다. 네이티브 P010 {width}x{height} @ {fps} FPS를 사용합니다."},
+        {L"toast.p010Unavailable", L"캡처보드와 호환되는 P010 모드를 맞추지 못했습니다. HDR 출력을 비활성화하고 {format} 캡처를 사용합니다."},
+        {L"toast.manualFormatHdrRequiresP010", L"HDR에는 P010이 필요하지만 캡처 형식이 수동으로 {format}에 설정되어 있습니다. HDR을 활성화하려면 자동 또는 P010을 선택하세요."},
+        {L"diagnostic.levelsNoRange", L"레벨: 이 경로에는 YUV 범위가 없습니다 (HDR / P010 캡처로 테스트하세요)"},
+        {L"diagnostic.levelsY", L"Y"},
+        {L"diagnostic.levelsSignal", L"신호"},
+        {L"diagnostic.levelsDecode", L"디코딩"},
+        {L"diagnostic.levelsCb", L"Cb"},
+        {L"diagnostic.levelsCr", L"Cr"},
+        {L"diagnostic.bits8", L"8비트"},
+        {L"value.full", L"전체"},
+        {L"value.limited", L"제한"},
+        {L"value.needBlack", L"? 검은 화면 필요"},
+        {L"unit.ms", L"ms"},
+        {L"unit.fps", L"FPS"},
+        {L"title.hdr", L"HDR"},
+        {L"title.sdr", L"SDR"},
+    };
+    return table;
+}
+
 } // namespace
 
 Localization& Localization::Instance()
@@ -201,7 +485,10 @@ Localization::Localization()
 LanguagePreference Localization::ParsePreference(const std::string& value)
 {
     if (value == "en-US") return LanguagePreference::English;
+    if (value == "zh-CN") return LanguagePreference::SimplifiedChinese;
     if (value == "zh-TW") return LanguagePreference::TraditionalChinese;
+    if (value == "de-DE") return LanguagePreference::German;
+    if (value == "ko-KR") return LanguagePreference::Korean;
     return LanguagePreference::System;
 }
 
@@ -218,16 +505,32 @@ void Localization::SetPreference(LanguagePreference preference)
         m_preferenceName = "en-US";
         m_localeName = L"en-US";
         break;
+    case LanguagePreference::SimplifiedChinese:
+        m_preferenceName = "zh-CN";
+        m_localeName = L"zh-CN";
+        break;
     case LanguagePreference::TraditionalChinese:
         m_preferenceName = "zh-TW";
         m_localeName = L"zh-TW";
         break;
-    case LanguagePreference::System:
-    default:
-        m_preferenceName = "system";
-        m_localeName = IsTraditionalChineseLocale(DetectSystemLocale())
-            ? L"zh-TW" : L"en-US";
+    case LanguagePreference::German:
+        m_preferenceName = "de-DE";
+        m_localeName = L"de-DE";
         break;
+    case LanguagePreference::Korean:
+        m_preferenceName = "ko-KR";
+        m_localeName = L"ko-KR";
+        break;
+    case LanguagePreference::System:
+    default: {
+        m_preferenceName = "system";
+        const auto locale = DetectSystemLocale();
+        m_localeName = IsSimplifiedChineseLocale(locale) ? L"zh-CN"
+            : IsTraditionalChineseLocale(locale) ? L"zh-TW"
+            : IsGermanLocale(locale) ? L"de-DE"
+            : IsKoreanLocale(locale) ? L"ko-KR" : L"en-US";
+        break;
+    }
     }
 }
 
@@ -248,12 +551,31 @@ bool Localization::IsTraditionalChineseLocale(const std::wstring& locale)
     return locale == L"zh-TW" || locale == L"zh-Hant-TW";
 }
 
+bool Localization::IsSimplifiedChineseLocale(const std::wstring& locale)
+{
+    return locale == L"zh-CN" || locale == L"zh-SG" || locale == L"zh-Hans" ||
+        locale.starts_with(L"zh-Hans-");
+}
+
+// Every German region (de-AT, de-CH and others) uses the de-DE resources.
+bool Localization::IsGermanLocale(const std::wstring& locale)
+{
+    return locale == L"de" || locale.starts_with(L"de-");
+}
+
+// Korean language variants use the ko-KR resources.
+bool Localization::IsKoreanLocale(const std::wstring& locale)
+{
+    return locale == L"ko" || locale.starts_with(L"ko-");
+}
+
 std::wstring Localization::Get(const wchar_t* key) const
 {
     if (!key || !*key) return L"";
 
-    const Table& selected = m_localeName == L"zh-TW"
-        ? TraditionalChineseTable() : EnglishTable();
+    const Table& selected = m_localeName == L"zh-CN" ? SimplifiedChineseTable() : m_localeName == L"zh-TW"
+        ? TraditionalChineseTable() : m_localeName == L"de-DE" ? GermanTable()
+        : m_localeName == L"ko-KR" ? KoreanTable() : EnglishTable();
     auto it = selected.find(key);
     if (it != selected.end() && !it->second.empty()) return it->second;
 
@@ -281,7 +603,9 @@ std::wstring Localization::Format(
 
 const wchar_t* Localization::UiFontFamily(const wchar_t* fallback) const
 {
-    return m_localeName == L"zh-TW" ? L"Microsoft JhengHei UI" : fallback;
+    return m_localeName == L"zh-CN" ? L"Microsoft YaHei UI"
+        : m_localeName == L"zh-TW" ? L"Microsoft JhengHei UI"
+        : m_localeName == L"ko-KR" ? L"Malgun Gothic" : fallback;
 }
 
 } // namespace NitLink

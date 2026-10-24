@@ -3,11 +3,15 @@
 #include "capture_device_names.h"
 #include "WebViewSettings.h"
 #include "settings_message.h"
+#include "hdmi_source_presence.h"
+#include "discord/activity_fields.h"
 #include "webview_policy.h"
 #include "game_database.h"
 #include "localization.h"
 #include "capture_output_policy.h"
+#include "display_refresh.h"
 #include "capture/elgato_hdr_control.h"
+#include "capture/elgato_4kx_source.h"
 #include "capture/elgato_device_identity.h"
 #include "capture/elgato_hid_4ks.h"
 #include <chrono>
@@ -460,6 +464,9 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
     m_window->SetPreventSleep(m_config->preventSleep);
     m_window->SetCloseCallback([this] {
         if (m_webviewSettings) m_webviewSettings->DispatchPendingMessages(/*closing=*/true);
+        // Release WASAPI before destroying the window or waiting on unrelated workers.
+        if (m_audioRouter) m_audioRouter->Shutdown();
+        m_running=false;
     });
 
     auto [actualW, actualH] = m_window->GetClientSize();
@@ -563,6 +570,7 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
     std::wstring chosenLower = chosen.name;
     std::transform(chosenLower.begin(), chosenLower.end(), chosenLower.begin(), ::towlower);
     m_is4KS = isElgato && chosenLower.find(L"4k s") != std::wstring::npos;
+    m_is4KX = isElgato && chosenLower.find(L"4k x") != std::wstring::npos;
     m_isGC553Pro = GetCaptureDevicePolicy(chosen.name).family ==
                    CaptureDeviceFamily::AverMediaGC553Pro;
     if (m_isGC553Pro) {
@@ -599,7 +607,12 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
     // vendor HID (e.g. PlayStation 5), the source identity becomes the
     // proxy for "user probably wants HDR". P010 negotiation can still fail
     // at the MF level, in which case the fallback path below catches it.
-    if (isElgato) {
+    if (m_is4KX) {
+        m_source4KProMode = {};
+        Apply4KXSourceHdr(m_source4KProMode, m_sourceIsHDR10,
+                          m_hdrDetectionAvailable);
+        AppLog(L"Initialize: 4K X HDR detection awaits the live source poller");
+    } else if (isElgato) {
         HDRSourceInfo srcInfo = ReadElgatoHDRSource(chosen.name);
         m_sourceIsHDR10        = srcInfo.isHDR10;
         m_hdrDetectionAvailable = srcInfo.propertyAccessible;
@@ -786,6 +799,11 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
             AppLog(L"Initialize: " + warning);
             ShowToast(warning, std::chrono::milliseconds(8000));
         }
+    } else if (m_is4KX) {
+        useP010 = Decide4KXSourceCapturePolicy(
+            NegotiatedCaptureFormatKind::Other, false, userWantsHDR,
+            formatPreference, m_sourceIsHDR10, m_hdrDetectionAvailable,
+            false).desiredCaptureIsP010;
     } else if (m_is4KS) {
         useP010 = isElgato && m_sourceIsHDR10 && userWantsHDR;
     } else {
@@ -832,7 +850,10 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
     // SDR, which makes the SDR picture look washed (HDR codes
     // interpreted as 100-nit-paper-white SDR). Always pair the two.
     // Sent only when the selected device is a 4K S, since the HID protocol is
-    // 4K S-specific (VID 0x0FD9 + PID 0x00AE/0x00AF).
+    // 4K S-specific (VID 0x0FD9 + PID 0x00AE/0x00AF). The 4K X has the same
+    // on-card converter behind the Elgato property set and gets the same
+    // pairing below; a 4K X with a 120 Hz source captures 4K only as 8-bit
+    // NV12, so without the pairing an HDR source arrives as raw PQ codes.
     // Detect4KSHdmiSource already fired earlier in Initialize (before
     // the useP010 decision so the source-ID heuristic can feed into
     // it); no second call here.
@@ -840,6 +861,11 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
         AppLog(useP010
             ? L"Initialize: 4K S HID tonemap OFF sent for raw HDR/P010"
             : L"Initialize: 4K S HID tonemap ON sent for SDR/NV12");
+    }
+    if (m_is4KX && SetElgatoTonemap(chosen.name, /*enable=*/ !useP010)) {
+        AppLog(useP010
+            ? L"Initialize: 4K X tonemap OFF sent for raw HDR/P010"
+            : L"Initialize: 4K X tonemap ON sent for SDR/NV12");
     }
 
     // F1 Source picker manual override. Applied to the capture device
@@ -901,6 +927,9 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
             if (m_is4KS && Set4KSTonemap(/*enableTonemap=*/ true)) {
                 AppLog(L"Initialize: 4K S HID tonemap ON sent for SDR retry");
             }
+            if (m_is4KX && SetElgatoTonemap(chosen.name, /*enable=*/ true)) {
+                AppLog(L"Initialize: 4K X tonemap ON sent for SDR retry");
+            }
             if (!m_captureDevice->Open(chosen)) {
                 AppLog(L"Initialize: CaptureDevice::Open FAILED");
                 return false;
@@ -927,7 +956,7 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
     // edge so a source already live at launch needs no duplicate query.
     // Silent no-op on devices without the Elgato IKsPropertySet GUID
     // (4K S and non-Elgato sources).
-    if (isElgato && m_hdrDetectionAvailable && !m_is4KS) {
+    if (isElgato && m_hdrDetectionAvailable && !m_is4KS && !m_is4KX) {
         m_source4KProMode = Detect4KProSourceMode(chosen.name);
         m_prevSourceNoSignal = !m_source4KProMode.detected;
     }
@@ -938,7 +967,6 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
     // never the HID/processing path. The XU read needs a LIVE signal, so it
     // does not run at init: the device is flagged by name and Run() fires the
     // read on each no-signal to signal (re)lock edge.
-    m_is4KX = isElgato && (chosen.name.find(L"4K X") != std::wstring::npos);
 
     // Log every native format this device exposes. Pure diagnostic: does
     // NOT change the running pipeline. Useful when triaging: confirms
@@ -1006,6 +1034,13 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
                        L"frames carry clean SDR instead of raw HDR codes");
             }
         }
+    }
+    if (m_is4KX && useP010 &&
+        !IsEqualGUID(format.subtype, MFVideoFormat_P010) &&
+        SetElgatoTonemap(chosen.name, /*enable=*/ true)) {
+        AppLog(L"Initialize: P010 requested but Open negotiated a non-HDR "
+               L"format (the 4K X publishes 4K P010 only at 30 fps); flipped "
+               L"4K X tonemap ON so NV12 frames carry clean SDR instead of raw HDR codes");
     }
 
     // Now safe to update the title: source identifier and HDR detection
@@ -1110,6 +1145,9 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
     }
 
     m_audioRouter = std::make_unique<AudioRouter>();
+    m_audioRouter->SetOwnerWindow(m_window->GetHWND());
+    m_audioRouter->SetLatency(m_config->audioFifoMs, m_config->audioRenderMs, m_config->audioDrift);
+    m_audioRouter->SetExclusive(m_config->audioExclusive);
     // Route audio from the selected capture card to the default playback device.
     //
     // Pass the selected video device's full name as the audio endpoint hint
@@ -1149,7 +1187,7 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
     }
 
     // Frame differ: detects "is this captured frame new content vs a duplicate?"
-    // Needed for real game-FPS reporting. Best-effort init.
+    // Estimates visible content-change FPS, not the game's true FPS. Best-effort init.
     m_frameDiffer = std::make_unique<FrameDiffer>();
     if (!m_frameDiffer->Initialize(m_renderer->GetDevice())) {
         AppLog(L"Initialize: FrameDiffer::Initialize FAILED (continuing without)");
@@ -1201,9 +1239,12 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
         }
         if (action == L"setLanguage" && m_config) {
             const std::wstring requested = message->text;
-            if (requested == L"system" || requested == L"en-US" || requested == L"zh-TW") {
+            if (requested == L"system" || requested == L"en-US" || requested == L"zh-TW" || requested == L"zh-CN" || requested == L"de-DE" || requested == L"ko-KR") {
                 m_config->language = requested == L"en-US" ? "en-US"
-                    : requested == L"zh-TW" ? "zh-TW" : "system";
+                    : requested == L"zh-TW" ? "zh-TW"
+                    : requested == L"zh-CN" ? "zh-CN"
+                    : requested == L"de-DE" ? "de-DE"
+                    : requested == L"ko-KR" ? "ko-KR" : "system";
                 Localization::Instance().SetPreference(m_config->language);
                 if (m_overlay && !m_overlay->RefreshTextFormats()) {
                     AppLog(L"setLanguage: failed to refresh overlay text formats");
@@ -1212,6 +1253,25 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
                 UpdateWindowTitle();
                 PushSettingsState();
             }
+            return;
+        }
+        if (action == L"setManualHdmiSource" && m_config) {
+            // Validate before narrowing; identity updates never touch capture,
+            // renderer, automatic detector state, or HDR policy.
+            if (!IsValidManualHdmiSource(std::wstring_view(message->text))) return;
+            std::string requested;
+            for (wchar_t c : message->text) requested.push_back(static_cast<char>(c));
+            if (!m_config->SetManualHdmiSource(requested)) return;
+            m_config->Save("nitlink.json");
+            UpdateWindowTitle();
+            PushSettingsState();
+            return;
+        }
+        if (action == L"setManualHdmiSourceCustom" && m_config) {
+            if (!m_config->SetManualHdmiSourceCustom(std::wstring_view(message->text))) return;
+            m_config->Save("nitlink.json");
+            UpdateWindowTitle();
+            PushSettingsState();
             return;
         }
         if (action == L"setNoSignalMode" && m_config) {
@@ -1311,6 +1371,17 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
             m_config->preventSleep = !m_config->preventSleep;
             m_window->SetPreventSleep(m_config->preventSleep);
             m_config->Save("nitlink.json");
+            return;
+        }
+        if ((action == L"setAudioFifoMs" || action == L"setAudioRenderMs" || action == L"setAudioDrift" || action == L"setAudioExclusive") && m_config && m_audioRouter) {
+            if (action == L"setAudioFifoMs") m_config->audioFifoMs = static_cast<int>(message->number);
+            if (action == L"setAudioRenderMs") m_config->audioRenderMs = static_cast<int>(message->number);
+            if (action == L"setAudioDrift") m_config->audioDrift = message->number != 0;
+            if (action == L"setAudioExclusive") m_config->audioExclusive = message->number != 0;
+            m_audioRouter->SetLatency(m_config->audioFifoMs, m_config->audioRenderMs, m_config->audioDrift);
+            m_audioRouter->SetExclusive(m_config->audioExclusive);
+            m_config->Save("nitlink.json");
+            PushSettingsState();
             return;
         }
         if (action == L"setVolume" && m_config && m_audioRouter) {
@@ -1491,15 +1562,7 @@ bool Application::Initialize(HINSTANCE hInstance, int nCmdShow)
     m_discord = std::make_unique<DiscordRPC>();
     if (m_discord->Connect("1505211372286246944")) {
         AppLog(L"Initialize: Discord RPC connected");
-        // Set initial "idle" presence. This will be overwritten the moment
-        // the user selects a game from the settings menu.
-        m_discord->SetActivity(
-            L"In NitLink",
-            L"PS5 Capture Viewer",
-            std::chrono::system_clock::now(),
-            "nitlink-logo",
-            L"NitLink"
-        );
+        UpdateDiscordForCurrentGame();
     } else {
         AppLog(L"Initialize: Discord RPC unavailable (Discord not running or RPC disabled)");
     }
@@ -1817,9 +1880,9 @@ void Application::Run()
     auto lastPresentTime = std::chrono::steady_clock::now();
     
     auto lastFpsUpdate = Clock::now();
-    uint64_t lastFramesWritten    = 0;
-    uint64_t lastUniqueFrameCount = 0;
-    uint64_t lastPresentCount     = 0;
+    FrameRateCounters lastFpsCounters;
+    m_currentContentAvailable = false;
+    m_contentClassificationsSinceSample = 0;
 
     MSG msg{};
     while (m_running) {
@@ -1854,11 +1917,16 @@ void Application::Run()
         // retry) would otherwise dereference a null renderer here. Skipping the
         // resize is safe: the pending rebuild recreates the swap chain at the
         // current client size, and any later resize event repeats this block.
-        if (m_window->WasResized() && m_renderer) {
-            auto [w, h] = m_window->GetClientSize();
-            AppLog(L"Resize event: handling resize");
+        // A resize the swap chain refused stays pending: WasResized() remains
+        // set and the block runs again once the retry time is reached.
+        const bool resizePending = m_window->WasResized() && m_renderer;
+        const auto [w, h] = resizePending ? m_window->GetClientSize() : std::pair<uint32_t, uint32_t>{};
+        const auto resizeNow = std::chrono::steady_clock::now();
+        if (resizePending && (m_resizeRetryCount == 0 || resizeNow >= m_resizeRetryAt
+                || w != m_resizeRetryWidth || h != m_resizeRetryHeight)) {
+            if (m_resizeRetryCount == 0) AppLog(L"Resize event: handling resize");
             if (m_overlay) m_overlay->OnResizeBegin();
-            m_renderer->Resize(w, h);
+            const bool resized = m_renderer->Resize(w, h);
             ApplyPresentCap();
             // Update the WebView2 child controller bounds so it stays
             // sized to the new client rect. The control is always sized
@@ -1873,8 +1941,40 @@ void Application::Run()
                 // overlay stays functional after window resize.
                 m_overlay->OnResizeEnd();
             }
-            m_window->AcknowledgeResize();
-            AppLog(L"Resize event: done");
+            if (resized) {
+                if (m_resizeRetryCount > 0) {
+                    AppLog(L"Resize event: swap chain resized after "
+                        + std::to_wstring(m_resizeRetryCount) + L" refused attempt(s)");
+                }
+                m_resizeRetryCount = 0;
+                m_window->AcknowledgeResize();
+                AppLog(L"Resize event: done");
+            } else {
+                // Rendering continues into the previous buffers, which DWM
+                // scales to the window, until a retry succeeds.
+                ++m_resizeRetryCount;
+                m_resizeRetryWidth = w;
+                m_resizeRetryHeight = h;
+                const int shift = static_cast<int>(std::min<uint32_t>(m_resizeRetryCount - 1, 3));
+                m_resizeRetryAt = resizeNow + std::chrono::milliseconds(250 << shift);
+                if (m_resizeRetryCount == 1 || m_resizeRetryCount % 30 == 0) {
+                    AppLog(L"Resize event: swap chain kept its previous buffers ("
+                        + std::to_wstring(w) + L"x" + std::to_wstring(h) + L" refused, attempt "
+                        + std::to_wstring(m_resizeRetryCount) + L"); rendering at the previous size and retrying");
+                }
+            }
+        }
+
+        // Refresh display metadata only on a display notification or monitor
+        // crossing. Same-monitor moves reuse the cached rational rate.
+        if (m_window->WasDisplayChanged() || m_window->WasMoved()) {
+            const bool displayChanged = m_window->WasDisplayChanged();
+            m_window->AcknowledgeDisplayChange();
+            m_window->AcknowledgeMove();
+            if (displayChanged || MonitorFromWindow(m_window->GetHWND(),
+                    MONITOR_DEFAULTTONEAREST) != m_presentCapMonitor) {
+                ApplyPresentCap();
+            }
         }
 
         // HDR source auto-detect drain. Once per second, the HDR poller's
@@ -1921,6 +2021,31 @@ void Application::Run()
                     // mismatch where the renderer thinks the capture is P010
                     // before the capture device has actually switched.
                 }
+            }
+        }
+
+        // 4K X: a background poller reads the live source mode off the render
+        // thread (Detect4KXSourceMode opens a DirectShow filter, ~50-100ms; too
+        // slow for this loop). Start is idempotent. On a source-mode change, force
+        // a reconcile so capture re-matches the source resolution/fps. A live PS5
+        // resolution change is too brief to trip the no-signal edge, so polling is
+        // what catches it.
+        if (m_is4KX) {
+            // 4K X source poller: opens the XU once and holds it (Start is
+            // idempotent), reads resolution/fps/HDR/source name off the render
+            // thread via the readiness-poll + paced sequence the Elgato app uses.
+            m_4kxPoller.Start(m_currentDeviceInfo.name, m_source4KProMode);
+            if (m_4kxPoller.AcceptUpdate(&m_source4KProMode)) {
+                Apply4KXSourceHdr(m_source4KProMode, m_sourceIsHDR10,
+                                  m_hdrDetectionAvailable);
+                m_4kxForceReconcile = true;
+                if (m_settingsVisible) PushSettingsState();
+                AppLog(L"4K X source mode: "
+                       + std::to_wstring(m_source4KProMode.width) + L"x"
+                       + std::to_wstring(m_source4KProMode.height) + L"@"
+                       + std::to_wstring(m_source4KProMode.fps)
+                       + (!m_source4KProMode.hdrValid ? L" HDR unknown"
+                          : m_source4KProMode.hdrActive ? L" HDR" : L" SDR"));
             }
         }
 
@@ -2028,7 +2153,7 @@ void Application::Run()
             if (m_frameBuffer) {
                 m_frameBuffer->WaitForFrame(waitMs > 0 ? static_cast<unsigned long>(waitMs) : 0);
             }
-        } else if (m_lowLatency && m_renderer) {
+        } else if (ChoosePresentWaitPoint(pacing, m_lowLatency) == PresentWaitPoint::BeforeCapture && m_renderer) {
             m_renderer->WaitForFrameReady();
         }
 
@@ -2486,27 +2611,6 @@ void Application::Run()
             }
         }
 
-        // 4K X: a background poller reads the live source mode off the render
-        // thread (Detect4KXSourceMode opens a DirectShow filter, ~50-100ms; too
-        // slow for this loop). Start is idempotent. On a source-mode change, force
-        // a reconcile so capture re-matches the source resolution/fps. A live PS5
-        // resolution change is too brief to trip the no-signal edge, so polling is
-        // what catches it.
-        if (m_is4KX) {
-            // 4K X source poller: opens the XU once and holds it (Start is
-            // idempotent), reads resolution/fps/HDR/source name off the render
-            // thread via the readiness-poll + paced sequence the Elgato app uses.
-            m_4kxPoller.Start(m_currentDeviceInfo.name, m_source4KProMode);
-            if (m_4kxPoller.AcceptUpdate(&m_source4KProMode)) {
-                m_4kxForceReconcile = true;
-                AppLog(L"4K X source mode: "
-                       + std::to_wstring(m_source4KProMode.width) + L"x"
-                       + std::to_wstring(m_source4KProMode.height) + L"@"
-                       + std::to_wstring(m_source4KProMode.fps)
-                       + (m_source4KProMode.hdrActive ? L" HDR" : L" SDR"));
-            }
-        }
-
         // =====================================================================
         // VRR PRESENT PACING: differ-driven Present
         // =====================================================================
@@ -2547,13 +2651,23 @@ void Application::Run()
         if (haveFreshFrame && freshFrameIsRealSource
             && m_frameDiffer && m_renderer->GetRawCaptureSRV()) {
             const auto differStart = std::chrono::steady_clock::now();
+            // Only "Source frame rate" presents from the classification, so
+            // only there may a starved readback wait for the GPU.
+            m_frameDiffer->SetReadbackWaitAllowed(pacing == kPacingUnique);
             m_frameDiffer->Process(m_renderer->GetContext(),
                                      m_renderer->GetRawCaptureSRV());
             m_loopDifferSumMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - differStart).count();
-            isNewFrame = m_frameDiffer->WasPreviousFrameNew();
-            m_sourceCadence.OnClassifiedFrame(isNewFrame);
-            if (isNewFrame) {
-                m_uniqueFrameCount++;
+            const bool classifiedNew = m_frameDiffer->WasPreviousFrameNew();
+            isNewFrame = m_frameDiffer->ShouldPresentCurrentFrame();
+            if (m_frameDiffer->HasFrameClassification()) {
+                if (m_frameDiffer->HasClassificationDiscontinuity()) m_sourceCadence.Reset();
+                m_sourceCadence.OnClassifiedFrame(classifiedNew);
+                ++m_contentClassificationsSinceSample;
+                if (classifiedNew) ++m_uniqueFrameCount;
+            } else {
+                m_sourceCadence.OnUnclassifiedFrame();
+            }
+            if (m_frameDiffer->HasFrameClassification() && classifiedNew) {
                 // Motion-recency gate: the differ saw a non-duplicate frame,
                 // so the HDMI source is producing fresh content. This is the
                 // motion half of the (motion OR content) gate consulted by
@@ -2578,37 +2692,31 @@ void Application::Run()
                 // Null guard: m_frameBuffer can be null between a failed
                 // reopen and a later successful one. Treat as "no new frames
                 // written this window" so m_currentFps naturally reads 0.
-                uint64_t framesWritten = m_frameBuffer
-                    ? m_frameBuffer->GetFramesWritten()
-                    : lastFramesWritten;
-                // Buffer-reset guard: framesWritten resets to 0 on every
-                // FrameBuffer rebuild (HDR/SDR reconcile, format change).
-                // Without this guard, 0 - lastFramesWritten underflows the
-                // unsigned subtraction and produces a ~2^32 fps spike on
-                // the next sample.
-                uint64_t deltaFrames = (framesWritten >= lastFramesWritten)
-                    ? framesWritten - lastFramesWritten
-                    : 0;
-                m_currentFps         = static_cast<uint32_t>(deltaFrames / elapsed);
-                lastFramesWritten    = framesWritten;
-
-                uint64_t deltaUnique   = m_uniqueFrameCount - lastUniqueFrameCount;
-                m_currentContentFps    = static_cast<uint32_t>(deltaUnique / elapsed);
-                lastUniqueFrameCount   = m_uniqueFrameCount;
-
-                uint64_t deltaPresents = m_presentCount - lastPresentCount;
-                m_currentPresentFps    = static_cast<uint32_t>(deltaPresents / elapsed);
-                lastPresentCount       = m_presentCount;
+                const FrameRateCounters counters{
+                    m_frameBuffer ? m_frameBuffer->GetFramesWritten()
+                                  : lastFpsCounters.captured,
+                    m_uniqueFrameCount, m_presentCount
+                };
+                const auto rates = SampleFrameRates(counters, lastFpsCounters,
+                                                   elapsed, m_contentClassificationsSinceSample > 0);
+                m_currentFps        = rates.captureFps;
+                m_currentContentFps = rates.contentFps;
+                m_currentPresentFps = rates.presentFps;
+                m_currentContentAvailable = rates.contentAvailable;
+                m_contentClassificationsSinceSample = 0;
+                lastFpsCounters     = counters;
 
                 lastFpsUpdate          = now;
 
                 if (m_settingsVisible) PushSettingsState();
             }
 
-            // VRR pacing diagnostic, every 2 seconds. Reports exactly what
-            // the differ is observing and whether classification is stable.
-            if (m_frameDiffer) {
+            // Low-frequency diagnostics: submission results and wait behavior
+            // remain observable even when the differ is unavailable.
+            if (m_frameDiffer || m_renderer) {
                 static auto lastDiffLog = Clock::now();
+                static uint64_t lastDropped = 0, lastReadbackSkips = 0;
+                static bool haveDiagnosticBaseline = false;
                 if (std::chrono::duration<double>(now - lastDiffLog).count() >= 2.0) {
                     // dropped = total frames the producer (capture worker)
                     // overran because the renderer hadn't picked up the
@@ -2620,13 +2728,18 @@ void Application::Run()
                     // chasing transition-time anomalies.
                     const uint64_t dropped =
                         m_frameBuffer ? m_frameBuffer->GetFramesDropped() : 0;
+                    const uint64_t readbackSkips = m_frameDiffer ? m_frameDiffer->GetReadbackSkips() : 0;
+                    const bool counterReset = !haveDiagnosticBaseline ||
+                        dropped < lastDropped || readbackSkips < lastReadbackSkips;
+                    const CaptureFormat negotiated = m_captureDevice ? m_captureDevice->GetOutputFormat() : CaptureFormat{};
                     std::wstringstream ss;
-                    ss << L"VRR pacing: lastDiff=" << m_frameDiffer->GetLastDiffValue()
-                       << L" threshold=" << m_frameDiffer->GetThreshold()
-                       << L" maxTile=" << m_frameDiffer->GetLastMaxTileValue()
-                       << L" tileThr=" << m_frameDiffer->GetTileThreshold()
+                    ss << L"FPS/pacing: lastDiff=" << (m_frameDiffer ? m_frameDiffer->GetLastDiffValue() : 0.0f)
+                       << L" threshold=" << (m_frameDiffer ? m_frameDiffer->GetThreshold() : 0.0f)
+                       << L" maxTile=" << (m_frameDiffer ? m_frameDiffer->GetLastMaxTileValue() : 0.0f)
+                       << L" tileThr=" << (m_frameDiffer ? m_frameDiffer->GetTileThreshold() : 0.0f)
                        << L" contentFps=" << m_currentContentFps
-                       << L" hdmiFps=" << m_currentFps
+                       << L" contentAvailable=" << m_currentContentAvailable
+                       << L" captureFps=" << m_currentFps
                        << L" dropped=" << dropped
                        << L" totalSkipped=" << m_skippedFrameCount
                        << L" consecutive=" << m_consecutiveSkips
@@ -2653,8 +2766,40 @@ void Application::Run()
                            << L" presentMs=" << ph.presentMs
                            << L" iters=" << m_loopIterations
                            << L" presents=" << ph.presents
-                           << L" readbackSkips=" << m_frameDiffer->GetReadbackSkips()
+                           << L" readbackSkips=" << readbackSkips
+                           << L" droppedDelta=" << (counterReset ? 0 : dropped - lastDropped)
+                           << L" readbackSkipDelta=" << (counterReset ? 0 : readbackSkips - lastReadbackSkips)
+                           << L" readbackWaits=" << (m_frameDiffer ? m_frameDiffer->GetReadbackWaits() : 0)
+                           << L" readbackWaitTimeouts=" << (m_frameDiffer ? m_frameDiffer->GetReadbackWaitTimeouts() : 0)
+                           << L" counterReset=" << counterReset
+                           << L" sampleSeconds=" << std::chrono::duration<double>(now - lastDiffLog).count()
+                           << L" presentOk=" << ph.presentOk
+                           << L" presentStatuses=" << ph.presentStatuses
+                           << L" presentFailed=" << ph.presentFailed
+                           << L" lastPresentHr=0x" << std::hex << static_cast<uint32_t>(ph.lastPresentResult) << std::dec
+                           << L" capWaits=" << ph.capWaits
+                           << L" waitableWaits=" << ph.waitableWaits
+                           << L" waitTimeouts=" << ph.waitTimeouts
+                           << L" waitFailed=" << ph.waitFailed
+                           << L" waitAlerted=" << ph.waitAlerted
+                           << L" pacing=" << (pacing == kPacingRefresh ? L"refresh" : pacing == kPacingCaptured ? L"captured" : L"unique")
+                           << L" monitorHz=" << m_presentCapMonitorHz
+                           << L" vsync=" << (m_renderer && m_renderer->IsVSyncOn())
+                           << L" lowLatency=" << m_lowLatency
+                           << L" capConfig=" << (m_config ? m_config->presentCapHz : 0)
+                           << L" capStoredHz=" << (m_renderer ? m_renderer->GetPresentCapHz() : 0.0)
+                           << L" capEffectiveHz=" << m_presentCapDecision.effectiveHz
+                           << L" capReason=" << PresentCapReasonName(m_presentCapDecision.reason)
+                           << L" mfSize=" << negotiated.width << L"x" << negotiated.height
+                           << L" mfRate=" << negotiated.fpsNumerator << L"/" << negotiated.fpsDenominator
+                           << L" mfFormat=" << (negotiated.subtype == MFVideoFormat_NV12 ? L"NV12"
+                               : negotiated.subtype == MFVideoFormat_P010 ? L"P010" : L"other")
+                           << L" settingsVisible=" << m_settingsVisible
+                           << L" gpuMs=" << (m_renderer ? m_renderer->GetLastGpuMs() : 0.0)
                            << L" compMode=" << (m_renderer ? m_renderer->PresentationMode() : -1);
+                        lastDropped = dropped;
+                        lastReadbackSkips = readbackSkips;
+                        haveDiagnosticBaseline = true;
                         m_loopPeriodSumMs = 0.0;
                         m_loopDifferSumMs = 0.0;
                         m_loopIterations  = 0;
@@ -2675,8 +2820,8 @@ void Application::Run()
         // Decision: should this iteration render and Present?
         //
         // kPacingRefresh: Present every iteration. The waitable swap chain
-        //   paces the loop near the desktop refresh rate, which is the
-        //   lowest-latency behavior and the default.
+        //   limits queue depth, while Auto/explicit caps can limit submissions.
+        //   An immediate tearing present may exceed refresh when explicitly uncapped.
         //
         // kPacingCaptured: Present once per frame the card delivers. The loop
         //   already blocked on the capture buffer above, so a fresh frame is
@@ -2741,16 +2886,7 @@ void Application::Run()
         }
 
         m_sourceCadence.OnPresent();
-        m_presentCount++;
         if (cadenceHold) m_cadenceHoldPresents++;
-
-        // Small sleep to avoid 100% CPU spin when running uncapped.
-        // 1ms is short enough to be imperceptible but stops the render loop
-        // from hammering at 3000+ fps doing nothing useful.
-        // LATENCY TEST (2026-06-02): disabled -- cost ~1ms on every presented
-        // frame; the waitable swapchain already paces the loop, so this was
-        // redundant. Restore if idle-content CPU spin returns.
-        // std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
         auto renderStart = Clock::now();
 
@@ -2773,7 +2909,7 @@ void Application::Run()
         // Source-paced modes already wait for capture arrivals. Waiting on
         // DXGI after selecting a frame would age it and allow later capture
         // frames to replace one another before the next read.
-        const bool waitForSwapChain = pacing == kPacingRefresh && !m_lowLatency;
+        const bool waitForSwapChain = ChoosePresentWaitPoint(pacing, m_lowLatency) == PresentWaitPoint::BeforeRender;
 
         // When the settings overlay is visible, render a solid black
         // frame underneath the WebView2 child every iteration. This is
@@ -2793,7 +2929,7 @@ void Application::Run()
         // frame applies only to the full-window panel.
         if (panelCoversPicture) {
             m_renderer->BeginFrame(waitForSwapChain);   // clears to (0,0,0,1): solid black
-            m_renderer->EndFrame();     // presents the black frame
+            if (m_renderer->EndFrame()) ++m_presentCount; // presents the black frame
             lastPresentTime = std::chrono::steady_clock::now();
             continue;                    // skip the rest of the pipeline
         }
@@ -2899,18 +3035,8 @@ void Application::Run()
                 stats.renderLatencyMs  = m_renderLatencyMs;
                 stats.appIngestMs      = m_mfDeliveryLatencyMs;
                 stats.gpuMs            = m_renderer->GetLastGpuMs();
-                // Content fps comes from the frame differ (detects unique
-                // frames). When the scene is static the differ correctly
-                // reports 0, but a "0 fps" reading is misleading because
-                // the game IS still running. Fall back to the HDMI signal
-                // rate in that case so the overlay never lies about it.
-                // Source frame rate pacing reports presents per second
-                // instead, the rate an external frame-generation tool sees.
-                stats.fps = (pacing == kPacingUnique && m_currentPresentFps > 0)
-                              ? m_currentPresentFps
-                              : (m_frameDiffer && m_currentContentFps > 0)
-                                  ? m_currentContentFps
-                                  : m_currentFps;
+                stats.frameRates = {m_currentFps, m_currentContentFps,
+                                    m_currentPresentFps, m_currentContentAvailable};
                 stats.captureWidth     = m_captureDevice->GetOutputFormat().width;
                 stats.captureHeight    = m_captureDevice->GetOutputFormat().height;
                 stats.deviceName       = m_captureDevice->GetDeviceName();
@@ -2952,7 +3078,7 @@ void Application::Run()
                 TakeScreenshot();
             }
 
-            m_renderer->EndFrame();
+            if (m_renderer->EndFrame()) ++m_presentCount;
             lastPresentTime = std::chrono::steady_clock::now();
         }
 
@@ -3064,24 +3190,8 @@ void Application::Run()
             stats.renderLatencyMs  = m_renderLatencyMs;
             stats.appIngestMs      = m_mfDeliveryLatencyMs;
             stats.gpuMs            = m_renderer->GetLastGpuMs();
-            // Prefer the real game framerate (from FrameDiffer) over the
-            // HDMI signal rate. They diverge for sub-60fps games: HDMI
-            // duplicates frames at the signal level, so a 30fps game still
-            // produces 60 captured frames/sec, and only the differ knows
-            // the real number.
-            //
-            // BUT: when the scene is static (menu screens, paused game,
-            // looking at a wall), the differ correctly reports 0 unique
-            // frames, and displaying "0 fps" to the user is misleading
-            // because the game IS still running. Fall back to the HDMI
-            // signal rate in that case. Source frame rate pacing reports
-            // presents per second instead, the rate an external
-            // frame-generation tool sees.
-            stats.fps = (pacing == kPacingUnique && m_currentPresentFps > 0)
-                          ? m_currentPresentFps
-                          : (m_frameDiffer && m_currentContentFps > 0)
-                              ? m_currentContentFps
-                              : m_currentFps;
+            stats.frameRates = {m_currentFps, m_currentContentFps,
+                                m_currentPresentFps, m_currentContentAvailable};
             stats.captureWidth     = m_captureDevice->GetOutputFormat().width;
             stats.captureHeight    = m_captureDevice->GetOutputFormat().height;
             stats.deviceName       = m_captureDevice->GetDeviceName();
@@ -3109,7 +3219,7 @@ void Application::Run()
             TakeScreenshot();
         }
 
-        m_renderer->EndFrame();
+        if (m_renderer->EndFrame()) ++m_presentCount;
         lastPresentTime = std::chrono::steady_clock::now();
         } // end if (!hdrActive)
         
@@ -3123,6 +3233,10 @@ void Application::Shutdown()
     m_running = false;
     if (m_webviewSettings) m_webviewSettings->DispatchPendingMessages(/*closing=*/true);
     if (m_window) m_window->SetVideoAvailable(false);
+    if (m_audioRouter) {
+        m_audioRouter->Shutdown();
+        m_audioRouter.reset();
+    }
     m_4kxPoller.Stop();
 
     // Stop the HDR source poller FIRST. Its worker thread can be mid-call
@@ -3143,10 +3257,6 @@ void Application::Shutdown()
         m_discord.reset();
     }
 
-    if (m_audioRouter) {
-        m_audioRouter->Shutdown();
-        m_audioRouter.reset();
-    }
 
     // Stop capture FIRST and explicitly close the device. The Elgato driver
     // can hold the device handle indefinitely if the process exits without
@@ -3617,7 +3727,12 @@ bool Application::ReconcileCaptureFormat(bool force)
     // keeps the structure consistent with the other call sites.
     const bool isElgato = IsElgatoDevice(m_currentDeviceInfo.name);
 
-    if (force && isElgato && m_hdrDetectionAvailable) {
+    if (m_is4KX) {
+        // The XU poller owns source reads; Pro properties and S HID probes
+        // cannot refresh a 4K X and must not replace its cached HDR state.
+        Apply4KXSourceHdr(m_source4KProMode, m_sourceIsHDR10,
+                          m_hdrDetectionAvailable);
+    } else if (force && isElgato && m_hdrDetectionAvailable) {
         bool titleDirty = false;
 
         // Try the 4K Pro IKsPropertySet path first. Cheap (no HID
@@ -3693,6 +3808,7 @@ bool Application::ReconcileCaptureFormat(bool force)
 
     bool wantP010;
     Gc553ProSourceCapturePolicy gc553ProPolicy{};
+    Elgato4KXCapturePolicy fourKXPolicy{};
     if (m_isGC553Pro) {
         if (!m_config->hdrAutoFromSource ||
             formatPreference != CaptureFormatPreference::Auto)
@@ -3714,6 +3830,12 @@ bool Application::ReconcileCaptureFormat(bool force)
             AppLog(L"Reconcile: " + warning);
             ShowToast(warning, std::chrono::milliseconds(8000));
         }
+    } else if (m_is4KX) {
+        fourKXPolicy = Decide4KXSourceCapturePolicy(
+            actualCaptureFormat, retainedFormatBelongsToCurrentDevice,
+            userWantsHDR, formatPreference, m_sourceIsHDR10,
+            m_hdrDetectionAvailable, !force && m_nonGcP010Fallback.Accepted());
+        wantP010 = fourKXPolicy.desiredCaptureIsP010;
     } else if (m_is4KS) {
         // Existing Elgato 4K S policy is intentionally unchanged.
         wantP010 = isElgato && m_sourceIsHDR10 && userWantsHDR;
@@ -3749,6 +3871,7 @@ bool Application::ReconcileCaptureFormat(bool force)
         wantP010, retainedFormatBelongsToCurrentDevice, force);
     const bool formatReopenNeeded = m_isGC553Pro
         ? gc553ProPolicy.reopenCapture
+        : m_is4KX ? fourKXPolicy.reopenCapture
         : ShouldReopenNonGcCapture(
               wantP010, actualCaptureFormat,
               retainedFormatBelongsToCurrentDevice,
@@ -3900,6 +4023,11 @@ bool Application::ReconcileCaptureFormat(bool force)
             ? L"Reconcile: 4K S HID tonemap OFF sent for raw HDR/P010"
             : L"Reconcile: 4K S HID tonemap ON sent for SDR/NV12");
     }
+    if (m_is4KX && SetElgatoTonemap(deviceToOpen.name, /*enable=*/ !wantP010)) {
+        AppLog(wantP010
+            ? L"Reconcile: 4K X tonemap OFF sent for raw HDR/P010"
+            : L"Reconcile: 4K X tonemap ON sent for SDR/NV12");
+    }
 
     // F1 Source picker manual override (same lifecycle as Initialize:
     // applied before Open, fallback handled inside CaptureDevice). This
@@ -3980,10 +4108,17 @@ bool Application::ReconcileCaptureFormat(bool force)
         if (m_is4KS && Set4KSTonemap(/*enableTonemap=*/ true)) {
             AppLog(L"Reconcile: 4K S HID tonemap ON sent for SDR retry");
         }
+        if (m_is4KX && SetElgatoTonemap(deviceToOpen.name, /*enable=*/ true)) {
+            AppLog(L"Reconcile: 4K X tonemap ON sent for SDR retry");
+        }
         opened = m_captureDevice->Open(deviceToOpen);
         if (opened) {
-            AppLog(L"Reconcile: rolled back hdrEnabled, P010 unavailable for this source");
-            m_config->hdrEnabled = false;
+            if (m_is4KX) {
+                AppLog(L"Reconcile: 4K X P010 unavailable; retaining HDR output preference");
+            } else {
+                AppLog(L"Reconcile: rolled back hdrEnabled, P010 unavailable for this source");
+                m_config->hdrEnabled = false;
+            }
             if (m_isGC553Pro) {
                 if (m_config->hdrAutoFromSource &&
                     m_gc553ProSourceState == Gc553ProSourceHdrState::Hdr10Pq &&
@@ -4051,6 +4186,12 @@ bool Application::ReconcileCaptureFormat(bool force)
             }
         }
     }
+    if (m_is4KX && wantP010 &&
+        !IsEqualGUID(format.subtype, MFVideoFormat_P010) &&
+        SetElgatoTonemap(deviceToOpen.name, /*enable=*/ true)) {
+        AppLog(L"Reconcile: wantP010=true but Open negotiated a non-HDR "
+               L"format; flipped 4K X tonemap ON for clean SDR NV12");
+    }
 
     // Title bar may need updating: if the source HDR state changed (the
     // earlier force-reopen re-probe already set m_sourceIsHDR10) OR if
@@ -4074,6 +4215,8 @@ bool Application::ReconcileCaptureFormat(bool force)
     // classification can persist across the swap, leaving contentFps wedged
     // at 0 even when fresh content is arriving from the new capture session.
     if (m_frameDiffer) m_frameDiffer->Reset();
+    m_currentContentAvailable = false;
+    m_contentClassificationsSinceSample = 0;
     // The new stream may run at another source rate, so its cadence is
     // measured again from the first new frames.
     m_sourceCadence.Reset();
@@ -4134,7 +4277,7 @@ bool Application::ReconcileCaptureFormat(bool force)
         // Without this sync, the swap chain stays HDR10 (from Alt+H ON)
         // while the renderer feeds 8-bit SDR luma through it. Bring
         // both flags down to match capture reality.
-        if (wantP010 && !captureIsP010 && m_config->hdrEnabled) {
+        if (!m_is4KX && wantP010 && !captureIsP010 && m_config->hdrEnabled) {
             AppLog(L"Reconcile: capture is non-P010 despite wantP010; "
                    L"disabling renderer HDR mode and rolling back hdrEnabled");
             m_config->hdrEnabled = false;
@@ -4188,95 +4331,41 @@ void Application::ToggleVSync()
     PushSettingsState();
 }
 
-// Present-rate cap policy for the low-latency tearing-allowed present.
+// Present-rate cap for display-refresh pacing with VSync off. Keep the
+// existing monitor-minus-3 headroom when it can accommodate the source;
+// otherwise cap at the monitor rate instead of accidentally going unlimited.
+// Explicit Off, fixed caps, marker priority and source/VSync bypasses remain.
 //
-// The tearing-mode cap keeps presents below the variable-refresh ceiling.
-// Synchronized presents bypass it so a second clock does not delay frames
-// past the next refresh. A fixed-refresh display gains nothing from the cap and loses frames whenever the
-// cap sits under the source rate (a 60 Hz panel with a 60 fps source capped
-// at 57 Hz skips three frames a second). The automatic cap is therefore the
-// monitor refresh minus 3, applied only when that stays at or above the
-// source frame rate. present_cap_hz in nitlink.json: 0 automatic, negative
-// off, 30 to 1000 a fixed rate. A VRR_CAP.txt marker overrides the cap
-// policy inside the renderer, but is also bypassed while VSync is enabled.
-//
-// The refresh rate is read from the current display mode of the monitor
-// under the window. A window dragged to another monitor without a resize
-// keeps the previous cap until the next resize or format change.
+// The window's GDI device name identifies its active DisplayConfig source.
+// Query failures and ambiguous clones clear the rate instead of keeping a
+// different monitor's ceiling; policy selects an explicit conservative cap.
 void Application::ApplyPresentCap()
 {
-    if (!m_renderer) return;
-    if (m_renderer->IsVSyncOn()) {
-        m_renderer->SetPresentCap(0.0);
-        if (m_appliedPresentCapHz != 0.0) {
-            m_appliedPresentCapHz = 0.0;
-            AppLog(L"PresentCap: bypassed while VSync is enabled");
-        }
-        return;
-    }
+    if (!m_renderer || !m_config) return;
+    const auto refresh = QueryWindowDisplayRefresh(m_window ? m_window->GetHWND() : nullptr);
+    m_presentCapMonitor = refresh.monitor;
+    m_presentCapMonitorHz = refresh.refresh.hz;
+    const uint32_t rateHint = m_captureDevice ? m_captureDevice->GetPresentPacingRateHint() : 0;
+    m_presentCapDecision = ChoosePresentCap({m_config->presentCapHz, m_presentCapMonitorHz,
+        static_cast<double>(rateHint), m_config->presentPacing, m_renderer->IsVSyncOn(),
+        m_renderer->IsPresentCapFromMarker(), m_renderer->GetPresentCapHz()});
+    m_renderer->SetPresentCap(m_presentCapDecision.requestedHz);
 
-    // The cap exists to hold a tearing-allowed present a few Hz under the
-    // panel maximum so a variable refresh display stays inside its VRR
-    // window. Frame-generation friendly mode already paces Present from the
-    // source cadence, which sits below the panel rate, so a cap on top of
-    // that would drop captured frames without buying anything.
-    if (m_config && m_config->presentPacing != kPacingRefresh) {
-        const bool capOff = m_renderer->SetPresentCap(0.0);
-        if (m_appliedPresentCapHz != 0.0) {
-            m_appliedPresentCapHz = 0.0;
-            AppLog(capOff
-                ? L"PresentCap: off (present pacing follows the source)"
-                : L"PresentCap: VRR_CAP.txt pins the renderer cap; source-paced policy not applied");
-        }
-        return;
-    }
-
-    const int cfg = m_config->presentCapHz;
-    double capHz = 0.0;
-    std::wstring policy;
-
-    if (cfg >= 30) {
-        capHz = static_cast<double>(cfg);
-        policy = L"fixed " + std::to_wstring(cfg) + L" Hz (present_cap_hz)";
-    } else if (cfg < 0) {
-        policy = L"off (present_cap_hz)";
-    } else {
-        double refreshHz = 0.0;
-        HMONITOR monitor = MonitorFromWindow(m_window->GetHWND(), MONITOR_DEFAULTTONEAREST);
-        MONITORINFOEXW info{};
-        info.cbSize = sizeof(info);
-        if (monitor && GetMonitorInfoW(monitor, &info)) {
-            DEVMODEW mode{};
-            mode.dmSize = sizeof(mode);
-            // dmDisplayFrequency of 0 or 1 means the hardware default rate,
-            // which carries no usable number.
-            if (EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode) &&
-                mode.dmDisplayFrequency > 1) {
-                refreshHz = static_cast<double>(mode.dmDisplayFrequency);
-            }
-        }
-
-        const uint32_t sourceFps = m_captureDevice ? m_captureDevice->GetOutputFormat().fps : 0;
-        const double candidate = refreshHz - 3.0;
-        std::wstringstream ss;
-        if (refreshHz >= 50.0 && candidate >= static_cast<double>(sourceFps)) {
-            capHz = candidate;
-            ss << L"automatic " << static_cast<int>(candidate) << L" Hz (monitor "
-               << static_cast<int>(refreshHz) << L" Hz, source " << sourceFps << L" fps)";
-        } else if (refreshHz < 50.0) {
-            ss << L"off (monitor refresh unknown or under 50 Hz)";
-        } else {
-            ss << L"off (monitor " << static_cast<int>(refreshHz) << L" Hz minus 3 would sit under the "
-               << sourceFps << L" fps source)";
-        }
-        policy = ss.str();
-    }
-
-    const bool applied = m_renderer->SetPresentCap(capHz);
-    if (capHz != m_appliedPresentCapHz) {
-        m_appliedPresentCapHz = capHz;
-        AppLog(applied ? L"PresentCap: " + policy
-                       : L"PresentCap: VRR_CAP.txt pins the renderer cap; policy not applied: " + policy);
+    std::wstringstream ss;
+    ss << L"PresentCap: config=" << m_config->presentCapHz
+       << L" monitor=" << refresh.gdiDeviceName << L" monitorHz=" << m_presentCapMonitorHz
+       << L" refreshRatio=" << refresh.refresh.rational.numerator << L"/" << refresh.refresh.rational.denominator
+       << L" refreshStatus=" << DisplayRefreshStatusName(refresh.refresh.status)
+       << L" refreshOrigin=" << DisplayRefreshOriginName(refresh.refresh.origin)
+       << L" refreshApiError=" << refresh.apiError
+       << L" pacingHint=" << rateHint
+       << L" requestedHz=" << m_presentCapDecision.requestedHz
+       << L" storedHz=" << m_renderer->GetPresentCapHz()
+       << L" effectiveHz=" << m_presentCapDecision.effectiveHz
+       << L" reason=" << PresentCapReasonName(m_presentCapDecision.reason);
+    if (ss.str() != m_lastPresentCapLog) {
+        m_lastPresentCapLog = ss.str();
+        AppLog(m_lastPresentCapLog);
     }
 }
 
@@ -4561,6 +4650,8 @@ bool Application::RecoverFromDeviceLost()
     m_gc553ProPreviousFreshFrameWasPlaceholder = false;
     m_gc553ProStartupBlackHint.Reset();
     m_frameDiffer.reset();
+    m_currentContentAvailable = false;
+    m_contentClassificationsSinceSample = 0;
     m_nisUpscaler.reset();
     // Keep the Overlay object itself so its device-independent decoded No
     // Signal pixels survive the graphics-device rebuild. Shutdown releases all
@@ -4776,6 +4867,9 @@ bool Application::SwitchCaptureDevice(const std::wstring& deviceName)
         m_gc553ProSourceState = probe.state;
         m_hdrDetectionAvailable = probe.state != Gc553ProSourceHdrState::Unknown;
         m_sourceIsHDR10 = probe.state == Gc553ProSourceHdrState::Hdr10Pq;
+    } else if (m_is4KX) {
+        Apply4KXSourceHdr(m_source4KProMode, m_sourceIsHDR10,
+                          m_hdrDetectionAvailable);
     } else if (IsElgatoDevice(newDevice.name)) {
         HDRSourceInfo srcInfo = ReadElgatoHDRSource(newDevice.name);
         m_hdrDetectionAvailable = srcInfo.propertyAccessible;
@@ -4892,6 +4986,20 @@ void Application::PushSettingsState(bool refreshCaptureDevices)
     const std::wstring languagePreference(m_config->language.begin(), m_config->language.end());
     js << L"\"languagePreference\":\"" << languagePreference << L"\",";
     js << L"\"locale\":\"" << Localization::Instance().LocaleName() << L"\",";
+    js << L"\"manualHdmiSource\":\""
+       << Utf8ToWide(std::string(NormalizeManualHdmiSource(m_config->manualHdmiSource))) << L"\",";
+    js << L"\"manualHdmiSourceCustom\":\""
+       << JsonEscapeWide(Utf8ToWide(m_config->manualHdmiSourceCustom)) << L"\",";
+    js << L"\"effectiveHdmiSource\":\""
+       << JsonEscapeWide(GetEffectiveHdmiSourceLabel()) << L"\",";
+    js << L"\"manualHdmiSourceOptions\":[";
+    for (size_t i = 0; i < kManualHdmiSources.size(); ++i) {
+        if (i) js << L",";
+        const auto& [value, label] = kManualHdmiSources[i];
+        js << L"{\"value\":\"" << std::wstring(value.begin(), value.end())
+           << L"\",\"label\":\"" << JsonEscapeWide(std::wstring(label)) << L"\"}";
+    }
+    js << L"],";
     js << L"\"hdrEnabled\":"        << (m_config->hdrEnabled        ? L"true" : L"false") << L",";
     js << L"\"hdrAutoDetectAvailable\":" << (m_hdrDetectionAvailable ? L"true" : L"false") << L",";
     // GC553Pro source detection remains a supported device capability while
@@ -4910,6 +5018,32 @@ void Application::PushSettingsState(bool refreshCaptureDevices)
     js << L"\"lowLatency\":"        << (m_config->lowLatency        ? L"true" : L"false") << L",";
     js << L"\"preventSleep\":"      << (m_config->preventSleep      ? L"true" : L"false") << L",";
     js << L"\"audioMuted\":"        << (m_config->audioMuted        ? L"true" : L"false") << L",";
+    js << L"\"audioFifoMs\":" << m_config->audioFifoMs << L",";
+    js << L"\"audioRenderMs\":" << m_config->audioRenderMs << L",";
+    js << L"\"audioDrift\":" << (m_config->audioDrift ? L"true" : L"false") << L",";
+    js << L"\"audioExclusive\":" << (m_config->audioExclusive ? L"true" : L"false") << L",";
+    if (m_audioRouter) {
+        js << L"\"audioExclusiveActive\":" << (m_audioRouter->ExclusiveActive() ? L"true" : L"false") << L",";
+        const uint64_t audioQueues=m_audioRouter->QueueSnapshotUs();
+        js << L"\"audioFillMs\":" << (audioQueues >> 32) / 1000.0 << L",";
+        js << L"\"audioQueueMs\":" << static_cast<uint32_t>(audioQueues) / 1000.0 << L",";
+        js << L"\"audioEffectiveMs\":" << m_audioRouter->EffectiveQueueUs() / 1000.0 << L",";
+        js << L"\"audioAverageMs\":" << m_audioRouter->FifoAverageUs() / 1000.0 << L",";
+        js << L"\"audioMinMs\":" << m_audioRouter->FifoMinUs() / 1000.0 << L",";
+        js << L"\"audioMaxMs\":" << m_audioRouter->FifoMaxUs() / 1000.0 << L",";
+        js << L"\"audioEndpointInfo\":\"" << JsonEscapeWide(m_audioRouter->EndpointInfo()) << L"\",";
+        js << L"\"audioPeriodUs\":" << m_audioRouter->RenderPeriodUs() << L",";
+        js << L"\"audioPpm\":" << m_audioRouter->DriftPpm() << L",";
+        js << L"\"audioEstimatedPpm\":" << m_audioRouter->EstimatedDriftPpm() << L",";
+        js << L"\"audioClockValid\":" << (m_audioRouter->ClockEstimateValid() ? L"true" : L"false") << L",";
+        js << L"\"audioUnderrunEvents\":" << m_audioRouter->UnderrunEvents() << L",";
+        js << L"\"audioReloads\":" << m_audioRouter->AutomaticReloads() << L",";
+        js << L"\"audioUnderruns\":" << m_audioRouter->Underruns() << L",";
+        js << L"\"audioOverruns\":" << m_audioRouter->Overruns() << L",";
+        js << L"\"audioResyncs\":" << m_audioRouter->Resyncs() << L",";
+        js << L"\"audioAdaptive\":" << (m_audioRouter->AdaptiveSupported() ? L"true" : L"false") << L",";
+        js << L"\"audioStreaming\":" << (m_audioRouter->IsStreaming() ? L"true" : L"false") << L",";
+    }
     js << L"\"volume\":"            << m_config->audioVolume        << L",";
     js << L"\"pipOpacity\":"        << m_config->pipOpacity         << L",";
     js << L"\"scalerName\":\"Catmull-Rom\",";
@@ -4931,6 +5065,8 @@ void Application::PushSettingsState(bool refreshCaptureDevices)
         js << L"\"negotiatedWidth\":"  << fmt.width  << L",";
         js << L"\"negotiatedHeight\":" << fmt.height << L",";
         js << L"\"negotiatedFps\":"    << fmt.fps    << L",";
+        js << L"\"negotiatedFpsNumerator\":" << fmt.fpsNumerator << L",";
+        js << L"\"negotiatedFpsDenominator\":" << fmt.fpsDenominator << L",";
         js << L"\"negotiatedFormat\":\"" << FormatGuidToString(fmt.subtype) << L"\",";
 
         // Available formats: the full set the device's media type handler
@@ -5002,7 +5138,7 @@ void Application::PushSettingsState(bool refreshCaptureDevices)
         m_lastScreenshotPath.clear();
     }
 
-    // Header meta line: real capture resolution, last measured fps,
+    // Header meta line: negotiated capture resolution, measured capture FPS,
     // and end-to-end latency. These come from the running pipeline.
     {
         uint32_t w = 0, h = 0;
@@ -5013,7 +5149,8 @@ void Application::PushSettingsState(bool refreshCaptureDevices)
         }
         std::wstringstream res;
         if (w && h) {
-            res << w << L"×" << h << L" · " << m_currentContentFps << L" fps";
+            res << w << L"×" << h << L" · " << Tr(L"overlay.captureFps")
+                << L" " << m_currentFps;
         } else {
             res << Tr(L"overlay.noSignal");
         }
@@ -5142,16 +5279,20 @@ void Application::ApplyGameSettings(const std::string& gameId)
     }
 }
 
-void Application::UpdateDiscordForCurrentGame()
+void Application::UpdateDiscordForCurrentGame(bool preserveStartTime)
 {
     if (!m_discord || !m_config) return;
 
+    m_discordActivityStart = HdmiSourceActivityStartTime(
+        m_discordActivityStart, preserveStartTime, std::chrono::system_clock::now());
+    const auto sourceLabel = GetEffectiveHdmiSourceLabel();
+
     if (m_config->currentGameId.empty()) {
-        // No game: back to idle presence
+        // Discord supplies the application name; viewer details show HDMI identity.
         m_discord->SetActivity(
-            L"In NitLink",
-            L"PS5 Capture Viewer",
-            std::chrono::system_clock::now(),
+            std::wstring(GetDiscordActivityField(sourceLabel, L"In NitLink")),
+            L"Capture Viewer",
+            m_discordActivityStart,
             "nitlink-logo",
             L"NitLink"
         );
@@ -5174,9 +5315,9 @@ void Application::UpdateDiscordForCurrentGame()
     // Portal for the image to render. If no asset exists, Discord falls
     // back to no image: the text still shows fine.
     m_discord->SetActivity(
-        title,                                      // "Spider-Man 2"
-        L"Playing on PS5",                          // state line under title
-        std::chrono::system_clock::now(),           // restart elapsed timer
+        std::wstring(GetDiscordActivityField(title, L"Playing")),
+        std::wstring(GetDiscordActivityField(sourceLabel, L"Playing")),
+        m_discordActivityStart,                     // resets on game selection only
         m_config->currentGameId,                    // large image asset key
         title                                       // tooltip when hovering image
     );
@@ -5287,19 +5428,9 @@ void Application::UpdateWindowTitle()
 
     std::wstring title = L"NitLink";
 
-    // Source identifier segment. Currently populated on the 4K S path
-    // (Detect4KSHdmiSource decodes the HDMI Source Product Descriptor
-    // InfoFrame). Empty on the 4K Pro until a source-identifier
-    // mechanism is found on that device.
-    if (!m_detectedHdmiSource.empty()) {
-        title += L" - ";
-        title += m_detectedHdmiSource;
-    } else if (!m_source4KProMode.sourceName.empty()) {
-        // 4K X: source product string decoded from the XU SPD InfoFrame
-        // (Detect4KXSourceMode), e.g. "PS5". Same slot as the 4K S identifier.
-        title += L" - ";
-        title += m_source4KProMode.sourceName;
-    }
+    // Identity override is display-only; automatic detectors remain untouched.
+    const auto sourceLabel = GetEffectiveHdmiSourceLabel();
+    if (!sourceLabel.empty()) title += L" - " + sourceLabel;
 
     // Source resolution + fps segment. Currently populated on the 4K
     // Pro path (Detect4KProSourceMode reads the Elgato custom property
@@ -5344,6 +5475,15 @@ void Application::UpdateWindowTitle()
     }
 
     m_window->SetTitle(title);
+    UpdateDiscordForCurrentGame(/*preserveStartTime=*/ true);
+}
+
+std::wstring Application::GetEffectiveHdmiSourceLabel() const
+{
+    return std::wstring(NitLink::GetEffectiveHdmiSourceLabel(
+        m_config ? std::string_view(m_config->manualHdmiSource) : "auto",
+        m_detectedHdmiSource, m_source4KProMode.sourceName,
+        m_config ? Utf8ToWide(m_config->manualHdmiSourceCustom) : std::wstring{}));
 }
 
 } // namespace NitLink

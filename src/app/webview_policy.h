@@ -23,6 +23,9 @@ struct Resource {
 inline constexpr Resource Resources[] = {
     {MenuUri, L"nitlink-menu.html", L"text/html; charset=utf-8", ResourceKind::Document},
     {L"https://nitlink.invalid/locales/en-US.js", L"locales/en-US.js", L"text/javascript; charset=utf-8", ResourceKind::Script},
+    {L"https://nitlink.invalid/locales/de-DE.js", L"locales/de-DE.js", L"text/javascript; charset=utf-8", ResourceKind::Script},
+    {L"https://nitlink.invalid/locales/ko-KR.js", L"locales/ko-KR.js", L"text/javascript; charset=utf-8", ResourceKind::Script},
+    {L"https://nitlink.invalid/locales/zh-CN.js", L"locales/zh-CN.js", L"text/javascript; charset=utf-8", ResourceKind::Script},
     {L"https://nitlink.invalid/locales/zh-TW.js", L"locales/zh-TW.js", L"text/javascript; charset=utf-8", ResourceKind::Script},
     {L"https://nitlink.invalid/assets/menu/menu.js", L"assets/menu/menu.js", L"text/javascript; charset=utf-8", ResourceKind::Script},
     {L"https://nitlink.invalid/assets/menu/Archivo-400.ttf", L"assets/menu/Archivo-400.ttf", L"font/ttf", ResourceKind::Font},
@@ -45,7 +48,11 @@ inline bool CanOpenExternal(std::wstring_view current, std::wstring_view target,
     return userInitiated && IsTrustedDocument(current) &&
         (target == L"https://tally.so/r/EkZjNr" ||
          target == L"https://ko-fi.com/klosed89" ||
-         target == L"https://github.com/HolyBearTW");
+         target == L"https://github.com/HolyBearTW" ||
+         target == L"https://github.com/CN115" ||
+         target == L"https://github.com/Noka123" ||
+         target == L"https://github.com/i0rph" ||
+         target == L"https://store.steampowered.com/app/5346980");
 }
 inline bool IsLocalScreenshotPath(std::wstring_view path) {
     if (path.size() < 8 || path.size() > 32767 || path[1] != L':' || path[2] != L'\\' ||
